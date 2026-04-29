@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Cursus View",
+    "slug": "cursus-view",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "cursus-view",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#8E1537"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
+
