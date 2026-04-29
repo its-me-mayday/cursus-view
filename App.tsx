@@ -260,18 +260,32 @@ export default function App() {
 
   // ── Derived ──────────────────────────────────────────────────────────────
 
-  // tickNow is read so the memo recomputes every second
+  const elapsed = lastUpdated ? Math.floor((Date.now() - lastUpdated) / 1000) : 0;
+
+  // tickNow forces recompute every second for live countdown
   const activeLineArrivals = useMemo(() => {
     void tickNow;
     const arrivals = lineData.find((d) => d.line === activeLineTab)?.data?.arrivals ?? [];
-    const nowSec = Math.floor(Date.now() / 1000);
-    // recalculate ETA from original seconds and elapsed wall-clock time
-    return arrivals.map((a) => {
-      const elapsed = lastUpdated ? Math.floor((Date.now() - lastUpdated) / 1000) : 0;
-      const remaining = Math.max(0, a.time_to_arrival_seconds - elapsed);
-      return { ...a, _remaining: remaining };
-    });
+    const el = lastUpdated ? Math.floor((Date.now() - lastUpdated) / 1000) : 0;
+    return arrivals.map((a) => ({
+      ...a,
+      _remaining: Math.max(0, a.time_to_arrival_seconds - el),
+    }));
   }, [lineData, activeLineTab, tickNow, lastUpdated]);
+
+  // Combined cross-line imminent arrivals for the station overview
+  const imminentArrivals = useMemo(() => {
+    void tickNow;
+    const el = lastUpdated ? Math.floor((Date.now() - lastUpdated) / 1000) : 0;
+    const all: (ScheduledArrival & { _remaining: number; _line: LineID })[] = [];
+    for (const ld of lineData) {
+      for (const a of ld.data?.arrivals ?? []) {
+        const remaining = Math.max(0, a.time_to_arrival_seconds - el);
+        if (remaining < 3600) all.push({ ...a, _remaining: remaining, _line: ld.line });
+      }
+    }
+    return all.sort((a, b) => a._remaining - b._remaining).slice(0, 8);
+  }, [lineData, tickNow, lastUpdated]);
 
   const linesWithArrivals = useMemo(() => {
     return lineData
@@ -441,6 +455,26 @@ export default function App() {
             {/* Metro tabs + arrivals */}
             {!isLoading && (
               <>
+                {/* Prossimi arrivi — cross-line board */}
+                {imminentArrivals.length > 0 && (
+                  <>
+                    <Text style={[s.sectionTitle, { borderLeftColor: p.romanRed }]}>
+                      Prossimi arrivi
+                    </Text>
+                    <View style={s.boardCard}>
+                      {imminentArrivals.map((a, i) => (
+                        <BoardRow
+                          key={`${a.trip_id}-${a.stop_id}-${i}`}
+                          arrival={a}
+                          lineId={a._line}
+                          remaining={a._remaining}
+                          last={i === imminentArrivals.length - 1}
+                        />
+                      ))}
+                    </View>
+                  </>
+                )}
+
                 <View style={s.lineTabs}>
                   {LINE_IDS.map((line) => {
                     const cfg = LINE_CONFIG[line];
@@ -519,6 +553,39 @@ export default function App() {
 
 type ArrivalWithRemaining = ScheduledArrival & { _remaining: number };
 
+// Departure-board row for the cross-line "Prossimi arrivi" section
+function BoardRow({
+  arrival, lineId, remaining, last,
+}: {
+  arrival: ScheduledArrival;
+  lineId: LineID;
+  remaining: number;
+  last: boolean;
+}) {
+  const cfg = LINE_CONFIG[lineId];
+  const urgent = remaining <= 120;
+  const gone = remaining === 0;
+  return (
+    <View style={[s.boardRow, !last && s.boardRowBorder]}>
+      {/* Line badge */}
+      <View style={[s.boardLineBadge, { backgroundColor: cfg.color }]}>
+        <Text style={s.boardLineBadgeText}>M{cfg.label}</Text>
+      </View>
+      {/* Scheduled time */}
+      <Text style={s.boardTime}>{arrival.scheduled_time}</Text>
+      {/* Direction */}
+      <Text style={s.boardDirection} numberOfLines={1}>{arrival.direction || "—"}</Text>
+      {/* Live ETA */}
+      <View style={[s.boardEta, urgent && !gone && s.boardEtaUrgent, gone && s.boardEtaGone]}>
+        <Text style={[s.boardEtaText, urgent && !gone && s.boardEtaTextUrgent, gone && s.boardEtaTextGone]}>
+          {formatEta(remaining)}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+// Per-line detailed arrival card
 function ArrivalCard({ arrival, remaining, lineColor }: { arrival: ArrivalWithRemaining; remaining: number; lineColor: string }) {
   const urgent = remaining <= 120;
   const gone = remaining === 0;
@@ -668,6 +735,46 @@ const s = StyleSheet.create({
   // Section titles
   sectionTitle: { borderLeftWidth: 3, color: p.ink, fontSize: 15, fontWeight: "800", paddingLeft: 10 },
   sectionSub: { color: p.mutedLight, fontSize: 12, paddingLeft: 13, marginTop: -8 },
+
+  // Departure board (cross-line prossimi arrivi)
+  boardCard: {
+    backgroundColor: p.panel,
+    borderColor: p.border,
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  boardRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  boardRowBorder: { borderBottomColor: p.border, borderBottomWidth: 1 },
+  boardLineBadge: {
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    minWidth: 34,
+    alignItems: "center",
+  },
+  boardLineBadgeText: { color: p.white, fontSize: 11, fontWeight: "800" },
+  boardTime: { color: p.ink, fontSize: 17, fontWeight: "900", width: 46 },
+  boardDirection: { color: p.muted, flex: 1, fontSize: 13, fontWeight: "600" },
+  boardEta: {
+    backgroundColor: "#F0F0F0",
+    borderRadius: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    minWidth: 52,
+    alignItems: "center",
+  },
+  boardEtaUrgent: { backgroundColor: "#FEF3C7" },
+  boardEtaGone: { backgroundColor: "#F5F5F5" },
+  boardEtaText: { color: p.muted, fontSize: 13, fontWeight: "800" },
+  boardEtaTextUrgent: { color: "#92400E" },
+  boardEtaTextGone: { color: p.mutedLight },
 
   // Arrival cards
   arrivalCard: {
