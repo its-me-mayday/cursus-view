@@ -37,14 +37,18 @@ type ScheduledArrivalsResponse = {
   line: LineID;
   source: string;
   realtime: boolean;
-  arrivals: ScheduledArrival[];
+  arrivals: ScheduledArrival[] | null;
 };
 
-type RealtimeRoute = {
-  id: string;
-  service_type: string;
-  source: string;
+type SurfaceRoute = {
+  route_id: string;
   active_vehicles: number;
+};
+
+type SurfaceRoutesResponse = {
+  station: string;
+  source: string;
+  routes: SurfaceRoute[];
 };
 
 type LineData = {
@@ -60,7 +64,7 @@ const LINE_IDS: LineID[] = ["MA", "MB", "MB1", "MC"];
 const DEFAULT_API_URL = "http://localhost:8085";
 const REFRESH_INTERVAL_MS = 30_000;
 
-// ─── Line config ─────────────────────────────────────────────────────────────
+// ─── Config ───────────────────────────────────────────────────────────────────
 
 const LINE_CONFIG: Record<LineID, { color: string; label: string }> = {
   MA: { color: "#C94B0C", label: "A" },
@@ -69,18 +73,15 @@ const LINE_CONFIG: Record<LineID, { color: string; label: string }> = {
   MC: { color: "#006B3C", label: "C" },
 };
 
-// ─── Known stations (per autocomplete) ──────────────────────────────────────
-
 const METRO_STATIONS = [
   "Anagnina", "Arco di Travertino", "Barberini", "Basilica San Paolo",
   "Battistini", "Bologna", "Borghesiana", "Castro Pretorio", "Cinecittà",
   "Cipro", "Circo Massimo", "Colosseo", "EUR Fermi", "EUR Laurentina",
   "EUR Palasport", "Flaminio", "Garbatella", "Grotte Celoni", "Giulio Agricola",
-  "Laurentina", "Lepanto", "Lucio Sestio", "Magliana",
-  "Mirti", "Monti Tiburtini", "Numidio Quadrato",
-  "Ottaviano", "Pantano", "Piramide", "Policlinico", "Ponte Lungo",
-  "Ponte Mammolo", "Re di Roma", "Rebibbia", "Repubblica",
-  "San Basilio", "San Giovanni", "San Paolo", "Santa Maria del Soccorso",
+  "Laurentina", "Lepanto", "Lucio Sestio", "Magliana", "Mirti",
+  "Monti Tiburtini", "Numidio Quadrato", "Ottaviano", "Pantano", "Piramide",
+  "Policlinico", "Ponte Lungo", "Ponte Mammolo", "Re di Roma", "Rebibbia",
+  "Repubblica", "San Basilio", "San Giovanni", "Santa Maria del Soccorso",
   "Spagna", "Subaugusta", "Termini", "Tiburtina",
   "Torre Gaia", "Torrenova", "Monte Compatri",
 ];
@@ -102,6 +103,27 @@ const p = {
   black: "#000000",
 };
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatEta(seconds: number): string {
+  if (seconds <= 30) return "ora";
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m >= 60) {
+    const h = Math.floor(m / 60);
+    const rem = m % 60;
+    return rem > 0 ? `${h}h ${rem}m` : `${h}h`;
+  }
+  return s > 0 ? `${m}m ${s}s` : `${m} min`;
+}
+
+function formatAge(seconds: number): string {
+  if (seconds < 10) return "adesso";
+  if (seconds < 60) return `${Math.round(seconds)}s fa`;
+  return `${Math.floor(seconds / 60)}m fa`;
+}
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -112,13 +134,25 @@ export default function App() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [health, setHealth] = useState<Health | null>(null);
   const [lineData, setLineData] = useState<LineData[]>([]);
-  const [realtimeRoutes, setRealtimeRoutes] = useState<RealtimeRoute[]>([]);
+  const [surfaceRoutes, setSurfaceRoutes] = useState<SurfaceRoute[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeLineTab, setActiveLineTab] = useState<LineID>("MA");
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null); // timestamp ms
+  const [tickNow, setTickNow] = useState(0); // increments every second for countdown
 
   const baseUrl = useMemo(() => apiUrl.trim().replace(/\/+$/, ""), [apiUrl]);
-  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tickTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Tick every second for live countdown ────────────────────────────────
+
+  useEffect(() => {
+    tickTimer.current = setInterval(() => setTickNow((n) => n + 1), 1000);
+    return () => { tickTimer.current && clearInterval(tickTimer.current); };
+  }, []);
+
+  // ── Fetch helpers ────────────────────────────────────────────────────────
 
   const fetchJson = useCallback(
     async <T,>(path: string): Promise<T> => {
@@ -138,17 +172,13 @@ export default function App() {
     [baseUrl],
   );
 
-  // ── Suggestions ─────────────────────────────────────────────────────────
+  // ── Suggestions ──────────────────────────────────────────────────────────
 
   const handleSearchChange = (text: string) => {
     setSearchText(text);
-    if (text.trim().length < 2) {
-      setSuggestions([]);
-      return;
-    }
+    if (text.trim().length < 2) { setSuggestions([]); return; }
     const q = text.toLowerCase();
-    const matches = METRO_STATIONS.filter((s) => s.toLowerCase().includes(q)).slice(0, 6);
-    setSuggestions(matches);
+    setSuggestions(METRO_STATIONS.filter((s) => s.toLowerCase().includes(q)).slice(0, 6));
   };
 
   const selectStation = (name: string) => {
@@ -156,6 +186,8 @@ export default function App() {
     setActiveStation(name);
     setSuggestions([]);
     setActiveLineTab("MA");
+    setLineData([]);
+    setSurfaceRoutes([]);
   };
 
   const clearStation = () => {
@@ -163,9 +195,11 @@ export default function App() {
     setActiveStation(null);
     setSuggestions([]);
     setLineData([]);
+    setSurfaceRoutes([]);
+    setLastUpdated(null);
   };
 
-  // ── Data fetch ──────────────────────────────────────────────────────────
+  // ── Data fetch ───────────────────────────────────────────────────────────
 
   const fetchStationData = useCallback(
     async (station: string, mode: "initial" | "refresh" = "initial") => {
@@ -181,7 +215,7 @@ export default function App() {
             `/api/v1/scheduled/metro/arrivals?station=${q}&line=${line}&limit=6`,
           ),
         ),
-        fetchJson<RealtimeRoute[]>("/api/v1/realtime/routes"),
+        fetchJson<SurfaceRoutesResponse>(`/api/v1/scheduled/surface-routes?station=${q}`),
       ]);
 
       if (healthResult.status === "fulfilled") setHealth(healthResult.value);
@@ -197,15 +231,13 @@ export default function App() {
       });
       setLineData(newLineData);
 
-      const routesResult = lineResults[LINE_IDS.length];
-      if (routesResult.status === "fulfilled") {
-        const routes = (routesResult.value as RealtimeRoute[])
-          .filter((r) => r.active_vehicles > 0)
-          .sort((a, b) => b.active_vehicles - a.active_vehicles)
-          .slice(0, 12);
-        setRealtimeRoutes(routes);
+      const surfaceResult = lineResults[LINE_IDS.length];
+      if (surfaceResult.status === "fulfilled") {
+        const res = surfaceResult.value as SurfaceRoutesResponse;
+        setSurfaceRoutes(res.routes ?? []);
       }
 
+      setLastUpdated(Date.now());
       setIsLoading(false);
       setIsRefreshing(false);
     },
@@ -215,35 +247,39 @@ export default function App() {
   useEffect(() => {
     if (!activeStation) return;
     fetchStationData(activeStation, "initial");
-
     refreshTimer.current && clearInterval(refreshTimer.current);
     refreshTimer.current = setInterval(() => {
       fetchStationData(activeStation, "refresh");
     }, REFRESH_INTERVAL_MS);
-
-    return () => {
-      refreshTimer.current && clearInterval(refreshTimer.current);
-    };
+    return () => { refreshTimer.current && clearInterval(refreshTimer.current); };
   }, [activeStation, fetchStationData]);
 
-  // Fetch health on mount
   useEffect(() => {
-    fetchJson<Health>("/health")
-      .then(setHealth)
-      .catch(() => {});
+    fetchJson<Health>("/health").then(setHealth).catch(() => {});
   }, [fetchJson]);
 
-  // ── Derived ─────────────────────────────────────────────────────────────
+  // ── Derived ──────────────────────────────────────────────────────────────
 
+  // tickNow is read so the memo recomputes every second
   const activeLineArrivals = useMemo(() => {
-    return lineData.find((d) => d.line === activeLineTab)?.data?.arrivals ?? [];
-  }, [lineData, activeLineTab]);
-
-  // Note: Go nil slice → JSON null, so arrivals can be null even when data is non-null
+    void tickNow;
+    const arrivals = lineData.find((d) => d.line === activeLineTab)?.data?.arrivals ?? [];
+    const nowSec = Math.floor(Date.now() / 1000);
+    // recalculate ETA from original seconds and elapsed wall-clock time
+    return arrivals.map((a) => {
+      const elapsed = lastUpdated ? Math.floor((Date.now() - lastUpdated) / 1000) : 0;
+      const remaining = Math.max(0, a.time_to_arrival_seconds - elapsed);
+      return { ...a, _remaining: remaining };
+    });
+  }, [lineData, activeLineTab, tickNow, lastUpdated]);
 
   const linesWithArrivals = useMemo(() => {
-    return lineData.filter((d) => d.data && (d.data.arrivals?.length ?? 0) > 0).map((d) => d.line);
+    return lineData
+      .filter((d) => d.data && (d.data.arrivals?.length ?? 0) > 0)
+      .map((d) => d.line);
   }, [lineData]);
+
+  const ageSec = lastUpdated ? (Date.now() - lastUpdated) / 1000 : null;
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -251,9 +287,8 @@ export default function App() {
     <SafeAreaView style={s.screen}>
       <StatusBar barStyle="light-content" backgroundColor={p.romanRed} />
 
-      {/* Header */}
       <View style={s.header}>
-        <View style={s.headerLeft}>
+        <View>
           <Text style={s.kicker}>Roma trasporto</Text>
           <Text style={s.title}>Cursus</Text>
         </View>
@@ -268,7 +303,6 @@ export default function App() {
         </View>
       </View>
 
-      {/* Settings panel */}
       {showSettings && (
         <View style={s.settingsPanel}>
           <Text style={s.settingsLabel}>Backend URL</Text>
@@ -294,18 +328,16 @@ export default function App() {
             : undefined
         }
       >
-        {/* Search section */}
+        {/* Search */}
         <View style={s.searchContainer}>
           <View style={s.searchRow}>
-            <View style={s.searchIcon}>
-              <Text style={s.searchIconText}>🔍</Text>
-            </View>
+            <Text style={s.searchIconText}>🔍</Text>
             <TextInput
               autoCapitalize="words"
               autoCorrect={false}
               onChangeText={handleSearchChange}
               onSubmitEditing={() => { if (searchText.trim()) selectStation(searchText.trim()); }}
-              placeholder="Cerca stazione…"
+              placeholder="Cerca stazione metro…"
               placeholderTextColor={p.mutedLight}
               returnKeyType="search"
               style={s.searchInput}
@@ -318,7 +350,6 @@ export default function App() {
             )}
           </View>
 
-          {/* Suggestions dropdown */}
           {suggestions.length > 0 && (
             <View style={s.suggestions}>
               {suggestions.map((sug, i) => (
@@ -342,10 +373,10 @@ export default function App() {
         {/* Empty state */}
         {!activeStation && suggestions.length === 0 && (
           <View style={[s.emptyState, { minHeight: 400 }]}>
-            <Text style={s.emptyStateEmoji}>🚇</Text>
-            <Text style={s.emptyStateTitle}>Roma Metro</Text>
-            <Text style={s.emptyStateSub}>Cerca una stazione per vedere gli orari</Text>
-            <View style={s.quickStations}>
+            <Text style={s.emptyEmoji}>🚇</Text>
+            <Text style={s.emptyTitle}>Roma Metro</Text>
+            <Text style={s.emptySub}>Cerca una stazione per vedere gli orari</Text>
+            <View style={s.quickRow}>
               {["Termini", "Spagna", "San Giovanni", "Tiburtina"].map((st) => (
                 <Pressable
                   key={st}
@@ -368,10 +399,24 @@ export default function App() {
                 <Text style={s.stationEyebrow}>Stazione</Text>
                 <Text style={s.stationName}>{activeStation}</Text>
               </View>
-              {isRefreshing && <ActivityIndicator color={p.romanRed} size="small" />}
+              <View style={s.stationHeaderRight}>
+                {ageSec !== null && (
+                  <Text style={s.ageText}>{formatAge(ageSec)}</Text>
+                )}
+                <Pressable
+                  onPress={() => fetchStationData(activeStation, "refresh")}
+                  style={({ pressed }) => [s.refreshBtn, pressed && s.pressed]}
+                  disabled={isRefreshing}
+                >
+                  {isRefreshing
+                    ? <ActivityIndicator color={p.romanRed} size="small" />
+                    : <Text style={s.refreshBtnText}>↻ Aggiorna</Text>
+                  }
+                </Pressable>
+              </View>
             </View>
 
-            {/* Lines with arrivals badges */}
+            {/* Line availability pills */}
             {linesWithArrivals.length > 0 && (
               <View style={s.linesBadgeRow}>
                 <Text style={s.linesBadgeLabel}>Linee metro</Text>
@@ -393,7 +438,7 @@ export default function App() {
               </View>
             )}
 
-            {/* Metro line tabs + arrivals */}
+            {/* Metro tabs + arrivals */}
             {!isLoading && (
               <>
                 <View style={s.lineTabs}>
@@ -414,11 +459,11 @@ export default function App() {
                         <Text style={[s.lineTabLabel, isActive && s.lineTabLabelActive]}>
                           M{cfg.label}
                         </Text>
-                        {count > 0 ? (
+                        {count > 0 && (
                           <Text style={[s.lineTabCount, isActive && s.lineTabCountActive]}>
                             {count}
                           </Text>
-                        ) : null}
+                        )}
                       </Pressable>
                     );
                   })}
@@ -430,26 +475,33 @@ export default function App() {
 
                 {activeLineArrivals.length > 0 ? (
                   activeLineArrivals.map((arrival, i) => (
-                    <ArrivalCard key={`${arrival.trip_id}-${arrival.stop_id}-${i}`} arrival={arrival} lineColor={LINE_CONFIG[activeLineTab].color} />
+                    <ArrivalCard
+                      key={`${arrival.trip_id}-${arrival.stop_id}-${i}`}
+                      arrival={arrival}
+                      remaining={arrival._remaining}
+                      lineColor={LINE_CONFIG[activeLineTab].color}
+                    />
                   ))
                 ) : (
                   <View style={s.noData}>
-                    <Text style={s.noDataText}>Nessun arrivo trovato per la Linea {LINE_CONFIG[activeLineTab].label} a {activeStation}</Text>
+                    <Text style={s.noDataText}>
+                      Nessun arrivo trovato per la Linea {LINE_CONFIG[activeLineTab].label} a {activeStation}
+                    </Text>
                   </View>
                 )}
 
-                {/* Realtime surface section */}
-                {realtimeRoutes.length > 0 && (
+                {/* Surface transit at this station */}
+                {surfaceRoutes.length > 0 && (
                   <>
                     <Text style={[s.sectionTitle, { borderLeftColor: p.muted, marginTop: 8 }]}>
-                      Veicoli in circolazione (realtime)
+                      Mezzi di superficie a {activeStation}
                     </Text>
                     <Text style={s.sectionSub}>
-                      Autobus e tram attivi su rete superficiale ATAC
+                      Veicoli con fermata qui in questo momento
                     </Text>
                     <View style={s.routeGrid}>
-                      {realtimeRoutes.map((route) => (
-                        <RouteChip key={route.id} route={route} />
+                      {surfaceRoutes.map((r) => (
+                        <SurfaceChip key={r.route_id} route={r} />
                       ))}
                     </View>
                   </>
@@ -465,35 +517,36 @@ export default function App() {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function ArrivalCard({ arrival, lineColor }: { arrival: ScheduledArrival; lineColor: string }) {
-  const mins = Math.round(arrival.time_to_arrival_seconds / 60);
-  const urgent = mins <= 2;
+type ArrivalWithRemaining = ScheduledArrival & { _remaining: number };
 
+function ArrivalCard({ arrival, remaining, lineColor }: { arrival: ArrivalWithRemaining; remaining: number; lineColor: string }) {
+  const urgent = remaining <= 120;
+  const gone = remaining === 0;
   return (
-    <View style={s.arrivalCard}>
+    <View style={[s.arrivalCard, gone && s.arrivalCardGone]}>
       <View style={[s.arrivalAccent, { backgroundColor: lineColor }]} />
       <View style={s.arrivalLeft}>
         <Text style={s.arrivalTime}>{arrival.scheduled_time}</Text>
-        <Text style={s.arrivalStop}>Stop {arrival.stop_id}</Text>
+        <Text style={s.arrivalStop}>{arrival.stop_id}</Text>
       </View>
       <View style={s.arrivalCenter}>
         <Text style={s.arrivalDirection} numberOfLines={1}>{arrival.direction || "—"}</Text>
-        <Text style={s.arrivalTripId} numberOfLines={1}>Trip {arrival.trip_id}</Text>
       </View>
-      <View style={[s.arrivalEta, urgent && s.arrivalEtaUrgent]}>
-        <Text style={[s.arrivalEtaText, urgent && s.arrivalEtaTextUrgent]}>
-          {arrival.time_to_arrival_human}
+      <View style={[s.arrivalEta, urgent && !gone && s.arrivalEtaUrgent, gone && s.arrivalEtaGone]}>
+        <Text style={[s.arrivalEtaText, urgent && !gone && s.arrivalEtaTextUrgent, gone && s.arrivalEtaTextGone]}>
+          {formatEta(remaining)}
         </Text>
       </View>
     </View>
   );
 }
 
-function RouteChip({ route }: { route: RealtimeRoute }) {
+function SurfaceChip({ route }: { route: SurfaceRoute }) {
   return (
-    <View style={s.routeChip}>
-      <Text style={s.routeChipId}>{route.id}</Text>
-      <Text style={s.routeChipCount}>{route.active_vehicles} 🚌</Text>
+    <View style={s.surfaceChip}>
+      <Text style={s.surfaceChipId}>{route.route_id}</Text>
+      <View style={s.surfaceChipDot} />
+      <Text style={s.surfaceChipCount}>{route.active_vehicles}</Text>
     </View>
   );
 }
@@ -501,90 +554,34 @@ function RouteChip({ route }: { route: RealtimeRoute }) {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const s = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: p.travertine,
-  },
+  screen: { flex: 1, backgroundColor: p.travertine },
 
-  // Header
   header: {
     alignItems: "center",
     backgroundColor: p.romanRed,
     flexDirection: "row",
     justifyContent: "space-between",
     paddingHorizontal: 20,
-    paddingBottom: 16,
-    paddingTop: 16,
+    paddingVertical: 16,
   },
-  headerLeft: {},
-  headerRight: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 10,
-  },
-  kicker: {
-    color: p.romanGold,
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1,
-    textTransform: "uppercase",
-  },
-  title: {
-    color: p.white,
-    fontSize: 28,
-    fontWeight: "800",
-    marginTop: 1,
-  },
-  statusDot: {
-    borderRadius: 999,
-    height: 10,
-    width: 10,
-  },
+  headerRight: { alignItems: "center", flexDirection: "row", gap: 10 },
+  kicker: { color: p.romanGold, fontSize: 11, fontWeight: "700", letterSpacing: 1, textTransform: "uppercase" },
+  title: { color: p.white, fontSize: 28, fontWeight: "800", marginTop: 1 },
+  statusDot: { borderRadius: 999, height: 10, width: 10 },
   dotOk: { backgroundColor: "#4ADE80" },
   dotDown: { backgroundColor: "#F87171" },
-  settingsBtn: {
-    padding: 4,
-  },
+  settingsBtn: { padding: 4 },
   settingsIcon: { color: p.romanGold, fontSize: 20 },
 
-  // Settings
-  settingsPanel: {
-    backgroundColor: "#7A1030",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    gap: 6,
-  },
-  settingsLabel: {
-    color: "rgba(255,255,255,0.6)",
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  settingsInput: {
-    backgroundColor: "rgba(255,255,255,0.12)",
-    borderRadius: 8,
-    color: p.white,
-    fontSize: 14,
-    minHeight: 40,
-    paddingHorizontal: 12,
-  },
+  settingsPanel: { backgroundColor: "#7A1030", paddingHorizontal: 20, paddingVertical: 12, gap: 6 },
+  settingsLabel: { color: "rgba(255,255,255,0.6)", fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5 },
+  settingsInput: { backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 8, color: p.white, fontSize: 14, minHeight: 40, paddingHorizontal: 12 },
 
-  scrollView: {
-    flex: 1,
-  },
-
-  // Content
-  content: {
-    gap: 14,
-    padding: 16,
-    paddingBottom: 40,
-  },
+  scrollView: { flex: 1 },
+  content: { gap: 14, padding: 16, paddingBottom: 40 },
 
   // Search
-  searchContainer: {
-    zIndex: 10,
-  },
+  searchContainer: { zIndex: 10 },
   searchRow: {
     alignItems: "center",
     backgroundColor: p.white,
@@ -601,317 +598,110 @@ const s = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  searchIcon: {
-    width: 24,
-  },
   searchIconText: { fontSize: 16 },
-  searchInput: {
-    color: p.ink,
-    flex: 1,
-    fontSize: 17,
-    fontWeight: "500",
-    minHeight: 52,
-  },
-  clearBtn: {
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 4,
-    width: 28,
-  },
-  clearBtnText: {
-    color: p.muted,
-    fontSize: 16,
-    fontWeight: "700",
-  },
+  searchInput: { color: p.ink, flex: 1, fontSize: 17, fontWeight: "500", minHeight: 52 },
+  clearBtn: { alignItems: "center", justifyContent: "center", padding: 4, width: 28 },
+  clearBtnText: { color: p.muted, fontSize: 16, fontWeight: "700" },
   suggestions: {
-    backgroundColor: p.white,
-    borderColor: p.border,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginTop: 4,
-    overflow: "hidden",
-    shadowColor: p.black,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
+    backgroundColor: p.white, borderColor: p.border, borderRadius: 12, borderWidth: 1, marginTop: 4,
+    overflow: "hidden", shadowColor: p.black, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 4,
   },
-  suggestion: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  suggestionBorder: {
-    borderBottomColor: p.border,
-    borderBottomWidth: 1,
-  },
+  suggestion: { alignItems: "center", flexDirection: "row", gap: 12, paddingHorizontal: 16, paddingVertical: 14 },
+  suggestionBorder: { borderBottomColor: p.border, borderBottomWidth: 1 },
   suggestionIcon: { fontSize: 16 },
-  suggestionText: {
-    color: p.ink,
-    fontSize: 16,
-    fontWeight: "500",
-  },
+  suggestionText: { color: p.ink, fontSize: 16, fontWeight: "500" },
 
   // Empty state
-  emptyState: {
-    alignItems: "center",
-    gap: 8,
-    justifyContent: "center",
-    paddingTop: 60,
-    paddingBottom: 60,
-  },
-  emptyStateEmoji: { fontSize: 56 },
-  emptyStateTitle: {
-    color: p.ink,
-    fontSize: 22,
-    fontWeight: "800",
-    marginTop: 8,
-  },
-  emptyStateSub: {
-    color: p.muted,
-    fontSize: 15,
-    textAlign: "center",
-  },
-  quickStations: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    justifyContent: "center",
-    marginTop: 16,
-  },
-  quickBtn: {
+  emptyState: { alignItems: "center", gap: 8, justifyContent: "center", paddingTop: 60, paddingBottom: 60 },
+  emptyEmoji: { fontSize: 56 },
+  emptyTitle: { color: p.ink, fontSize: 22, fontWeight: "800", marginTop: 8 },
+  emptySub: { color: p.muted, fontSize: 15, textAlign: "center" },
+  quickRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center", marginTop: 16 },
+  quickBtn: { backgroundColor: p.white, borderColor: p.border, borderRadius: 999, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 9 },
+  quickBtnText: { color: p.ink, fontSize: 14, fontWeight: "600" },
+
+  // Station header
+  stationHeader: { alignItems: "flex-start", flexDirection: "row", justifyContent: "space-between" },
+  stationEyebrow: { color: p.muted, fontSize: 11, fontWeight: "700", letterSpacing: 0.8, textTransform: "uppercase" },
+  stationName: { color: p.romanRed, fontSize: 30, fontWeight: "900", letterSpacing: -0.5, marginTop: 2 },
+  stationHeaderRight: { alignItems: "flex-end", gap: 6, marginTop: 4 },
+  ageText: { color: p.mutedLight, fontSize: 11 },
+  refreshBtn: {
     backgroundColor: p.white,
     borderColor: p.border,
-    borderRadius: 999,
+    borderRadius: 8,
     borderWidth: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 9,
+    minHeight: 34,
+    minWidth: 90,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
-  quickBtnText: {
-    color: p.ink,
-    fontSize: 14,
-    fontWeight: "600",
-  },
+  refreshBtnText: { color: p.romanRed, fontSize: 13, fontWeight: "700" },
 
-  // Station view
-  stationHeader: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 2,
-  },
-  stationEyebrow: {
-    color: p.muted,
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
-  },
-  stationName: {
-    color: p.romanRed,
-    fontSize: 30,
-    fontWeight: "900",
-    letterSpacing: -0.5,
-    marginTop: 2,
-  },
-  linesBadgeRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 10,
-  },
-  linesBadgeLabel: {
-    color: p.muted,
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  linesBadges: {
-    flexDirection: "row",
-    gap: 6,
-  },
-  lineBadge: {
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  lineBadgeText: {
-    color: p.white,
-    fontSize: 12,
-    fontWeight: "800",
-  },
+  // Line badges
+  linesBadgeRow: { alignItems: "center", flexDirection: "row", gap: 10 },
+  linesBadgeLabel: { color: p.muted, fontSize: 12, fontWeight: "700" },
+  linesBadges: { flexDirection: "row", gap: 6 },
+  lineBadge: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  lineBadgeText: { color: p.white, fontSize: 12, fontWeight: "800" },
 
   // Loading
   loadingBox: {
-    alignItems: "center",
-    backgroundColor: p.panel,
-    borderColor: p.border,
-    borderRadius: 12,
-    borderWidth: 1,
-    gap: 12,
-    padding: 32,
+    alignItems: "center", backgroundColor: p.panel, borderColor: p.border,
+    borderRadius: 12, borderWidth: 1, gap: 12, padding: 32,
   },
-  loadingText: {
-    color: p.muted,
-    fontSize: 15,
-  },
+  loadingText: { color: p.muted, fontSize: 15 },
 
   // Line tabs
-  lineTabs: {
-    flexDirection: "row",
-    gap: 8,
-  },
+  lineTabs: { flexDirection: "row", gap: 8 },
   lineTab: {
-    alignItems: "center",
-    backgroundColor: p.white,
-    borderColor: p.border,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    flex: 1,
-    gap: 4,
-    minHeight: 48,
-    justifyContent: "center",
+    alignItems: "center", backgroundColor: p.white, borderColor: p.border,
+    borderRadius: 10, borderWidth: 1.5, flex: 1, gap: 4, minHeight: 48, justifyContent: "center",
   },
-  lineTabLabel: {
-    color: p.ink,
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  lineTabLabelActive: {
-    color: p.white,
-  },
-  lineTabCount: {
-    color: p.muted,
-    fontSize: 11,
-    fontWeight: "700",
-  },
-  lineTabCountActive: {
-    color: "rgba(255,255,255,0.75)",
-  },
+  lineTabLabel: { color: p.ink, fontSize: 13, fontWeight: "800" },
+  lineTabLabelActive: { color: p.white },
+  lineTabCount: { color: p.muted, fontSize: 11, fontWeight: "700" },
+  lineTabCountActive: { color: "rgba(255,255,255,0.75)" },
 
   // Section titles
-  sectionTitle: {
-    borderLeftWidth: 3,
-    color: p.ink,
-    fontSize: 15,
-    fontWeight: "800",
-    paddingLeft: 10,
-  },
-  sectionSub: {
-    color: p.muted,
-    fontSize: 13,
-    marginTop: -8,
-    paddingLeft: 13,
-  },
+  sectionTitle: { borderLeftWidth: 3, color: p.ink, fontSize: 15, fontWeight: "800", paddingLeft: 10 },
+  sectionSub: { color: p.mutedLight, fontSize: 12, paddingLeft: 13, marginTop: -8 },
 
   // Arrival cards
   arrivalCard: {
-    alignItems: "center",
-    backgroundColor: p.panel,
-    borderColor: p.border,
-    borderRadius: 12,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: 0,
-    overflow: "hidden",
-    paddingRight: 12,
+    alignItems: "center", backgroundColor: p.panel, borderColor: p.border,
+    borderRadius: 12, borderWidth: 1, flexDirection: "row", overflow: "hidden", paddingRight: 12,
   },
-  arrivalAccent: {
-    alignSelf: "stretch",
-    marginRight: 12,
-    width: 4,
-  },
-  arrivalLeft: {
-    gap: 3,
-    paddingVertical: 12,
-    width: 54,
-  },
-  arrivalTime: {
-    color: p.ink,
-    fontSize: 17,
-    fontWeight: "900",
-  },
-  arrivalStop: {
-    color: p.mutedLight,
-    fontSize: 11,
-    fontWeight: "600",
-  },
-  arrivalCenter: {
-    flex: 1,
-    gap: 3,
-    paddingVertical: 12,
-  },
-  arrivalDirection: {
-    color: p.ink,
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  arrivalTripId: {
-    color: p.mutedLight,
-    fontSize: 11,
-  },
-  arrivalEta: {
-    backgroundColor: "#F0F0F0",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  arrivalEtaUrgent: {
-    backgroundColor: "#FEF3C7",
-  },
-  arrivalEtaText: {
-    color: p.muted,
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  arrivalEtaTextUrgent: {
-    color: "#92400E",
-  },
+  arrivalCardGone: { opacity: 0.45 },
+  arrivalAccent: { alignSelf: "stretch", marginRight: 12, width: 4 },
+  arrivalLeft: { gap: 2, paddingVertical: 12, width: 54 },
+  arrivalTime: { color: p.ink, fontSize: 17, fontWeight: "900" },
+  arrivalStop: { color: p.mutedLight, fontSize: 11, fontWeight: "600" },
+  arrivalCenter: { flex: 1, paddingVertical: 12, paddingRight: 8 },
+  arrivalDirection: { color: p.ink, fontSize: 14, fontWeight: "700" },
+  arrivalEta: { backgroundColor: "#F0F0F0", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, minWidth: 56, alignItems: "center" },
+  arrivalEtaUrgent: { backgroundColor: "#FEF3C7" },
+  arrivalEtaGone: { backgroundColor: "#F5F5F5" },
+  arrivalEtaText: { color: p.muted, fontSize: 13, fontWeight: "800" },
+  arrivalEtaTextUrgent: { color: "#92400E" },
+  arrivalEtaTextGone: { color: p.mutedLight },
 
   // No data
-  noData: {
-    backgroundColor: p.panel,
-    borderColor: p.border,
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 16,
-  },
-  noDataText: {
-    color: p.muted,
-    fontSize: 14,
-    lineHeight: 20,
-  },
+  noData: { backgroundColor: p.panel, borderColor: p.border, borderRadius: 12, borderWidth: 1, padding: 16 },
+  noDataText: { color: p.muted, fontSize: 14, lineHeight: 20 },
 
-  // Route chips
-  routeGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
+  // Surface chips
+  routeGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  surfaceChip: {
+    alignItems: "center", backgroundColor: p.white, borderColor: p.border,
+    borderRadius: 8, borderWidth: 1, flexDirection: "row", gap: 6,
+    paddingHorizontal: 12, paddingVertical: 8,
   },
-  routeChip: {
-    alignItems: "center",
-    backgroundColor: p.white,
-    borderColor: p.border,
-    borderRadius: 8,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-  routeChipId: {
-    color: p.ink,
-    fontSize: 14,
-    fontWeight: "800",
-    minWidth: 24,
-  },
-  routeChipCount: {
-    color: p.muted,
-    fontSize: 12,
-  },
+  surfaceChipId: { color: p.ink, fontSize: 15, fontWeight: "800" },
+  surfaceChipDot: { backgroundColor: "#4ADE80", borderRadius: 999, height: 6, width: 6 },
+  surfaceChipCount: { color: p.muted, fontSize: 12 },
 
-  // Shared
-  pressed: {
-    opacity: 0.7,
-  },
+  pressed: { opacity: 0.7 },
 });
