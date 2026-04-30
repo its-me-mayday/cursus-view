@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -40,15 +41,20 @@ type ScheduledArrivalsResponse = {
   arrivals: ScheduledArrival[] | null;
 };
 
-type SurfaceRoute = {
+type SurfaceScheduledArrival = {
+  stop_id: string;
   route_id: string;
-  active_vehicles: number;
+  trip_id: string;
+  direction: string;
+  scheduled_time: string;
+  time_to_arrival_seconds: number;
+  time_to_arrival_human: string;
 };
 
-type SurfaceRoutesResponse = {
+type SurfaceArrivalsResponse = {
   station: string;
   source: string;
-  routes: SurfaceRoute[];
+  arrivals: SurfaceScheduledArrival[];
 };
 
 type LineData = {
@@ -63,6 +69,8 @@ type LineID = "MA" | "MB" | "MB1" | "MC";
 const LINE_IDS: LineID[] = ["MA", "MB", "MB1", "MC"];
 const DEFAULT_API_URL = "http://localhost:8085";
 const REFRESH_INTERVAL_MS = 30_000;
+const RECENT_STATIONS_KEY = "cursus:recent_stations";
+const MAX_RECENT = 4;
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -134,12 +142,13 @@ export default function App() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [health, setHealth] = useState<Health | null>(null);
   const [lineData, setLineData] = useState<LineData[]>([]);
-  const [surfaceRoutes, setSurfaceRoutes] = useState<SurfaceRoute[]>([]);
+  const [surfaceArrivals, setSurfaceArrivals] = useState<SurfaceScheduledArrival[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [activeLineTab, setActiveLineTab] = useState<LineID>("MA");
   const [lastUpdated, setLastUpdated] = useState<number | null>(null); // timestamp ms
   const [tickNow, setTickNow] = useState(0); // increments every second for countdown
+  const [recentStations, setRecentStations] = useState<string[]>([]);
+  const [showSurface, setShowSurface] = useState(false);
 
   const baseUrl = useMemo(() => apiUrl.trim().replace(/\/+$/, ""), [apiUrl]);
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -150,6 +159,12 @@ export default function App() {
   useEffect(() => {
     tickTimer.current = setInterval(() => setTickNow((n) => n + 1), 1000);
     return () => { tickTimer.current && clearInterval(tickTimer.current); };
+  }, []);
+
+  useEffect(() => {
+    AsyncStorage.getItem(RECENT_STATIONS_KEY).then((raw) => {
+      if (raw) setRecentStations(JSON.parse(raw) as string[]);
+    }).catch(() => {});
   }, []);
 
   // ── Fetch helpers ────────────────────────────────────────────────────────
@@ -185,9 +200,14 @@ export default function App() {
     setSearchText(name);
     setActiveStation(name);
     setSuggestions([]);
-    setActiveLineTab("MA");
     setLineData([]);
-    setSurfaceRoutes([]);
+    setSurfaceArrivals([]);
+    setShowSurface(false);
+    setRecentStations((prev) => {
+      const updated = [name, ...prev.filter((s) => s !== name)].slice(0, MAX_RECENT);
+      AsyncStorage.setItem(RECENT_STATIONS_KEY, JSON.stringify(updated)).catch(() => {});
+      return updated;
+    });
   };
 
   const clearStation = () => {
@@ -195,7 +215,7 @@ export default function App() {
     setActiveStation(null);
     setSuggestions([]);
     setLineData([]);
-    setSurfaceRoutes([]);
+    setSurfaceArrivals([]);
     setLastUpdated(null);
   };
 
@@ -208,17 +228,21 @@ export default function App() {
 
       const q = encodeURIComponent(station.trim());
 
-      const [healthResult, ...lineResults] = await Promise.allSettled([
+      const [healthResult, surfaceResult, ...lineResults] = await Promise.allSettled([
         fetchJson<Health>("/health"),
+        fetchJson<SurfaceArrivalsResponse>(`/api/v1/scheduled/surface-arrivals?station=${q}&limit=8`),
         ...LINE_IDS.map((line) =>
           fetchJson<ScheduledArrivalsResponse>(
             `/api/v1/scheduled/metro/arrivals?station=${q}&line=${line}&limit=6`,
           ),
         ),
-        fetchJson<SurfaceRoutesResponse>(`/api/v1/scheduled/surface-routes?station=${q}`),
       ]);
 
       if (healthResult.status === "fulfilled") setHealth(healthResult.value);
+
+      if (surfaceResult.status === "fulfilled") {
+        setSurfaceArrivals(surfaceResult.value.arrivals ?? []);
+      }
 
       const newLineData: LineData[] = LINE_IDS.map((line, idx) => {
         const result = lineResults[idx];
@@ -230,12 +254,6 @@ export default function App() {
         return { line, data: null, error: err.message };
       });
       setLineData(newLineData);
-
-      const surfaceResult = lineResults[LINE_IDS.length];
-      if (surfaceResult.status === "fulfilled") {
-        const res = surfaceResult.value as SurfaceRoutesResponse;
-        setSurfaceRoutes(res.routes ?? []);
-      }
 
       setLastUpdated(Date.now());
       setIsLoading(false);
@@ -260,19 +278,6 @@ export default function App() {
 
   // ── Derived ──────────────────────────────────────────────────────────────
 
-  const elapsed = lastUpdated ? Math.floor((Date.now() - lastUpdated) / 1000) : 0;
-
-  // tickNow forces recompute every second for live countdown
-  const activeLineArrivals = useMemo(() => {
-    void tickNow;
-    const arrivals = lineData.find((d) => d.line === activeLineTab)?.data?.arrivals ?? [];
-    const el = lastUpdated ? Math.floor((Date.now() - lastUpdated) / 1000) : 0;
-    return arrivals.map((a) => ({
-      ...a,
-      _remaining: Math.max(0, a.time_to_arrival_seconds - el),
-    }));
-  }, [lineData, activeLineTab, tickNow, lastUpdated]);
-
   // Combined cross-line imminent arrivals for the station overview
   const imminentArrivals = useMemo(() => {
     void tickNow;
@@ -287,11 +292,14 @@ export default function App() {
     return all.sort((a, b) => a._remaining - b._remaining).slice(0, 8);
   }, [lineData, tickNow, lastUpdated]);
 
-  const linesWithArrivals = useMemo(() => {
-    return lineData
-      .filter((d) => d.data && (d.data.arrivals?.length ?? 0) > 0)
-      .map((d) => d.line);
-  }, [lineData]);
+  const surfaceArrivalsLive = useMemo(() => {
+    void tickNow;
+    const el = lastUpdated ? Math.floor((Date.now() - lastUpdated) / 1000) : 0;
+    return surfaceArrivals.map((a) => ({
+      ...a,
+      _remaining: Math.max(0, a.time_to_arrival_seconds - el),
+    }));
+  }, [surfaceArrivals, tickNow, lastUpdated]);
 
   const ageSec = lastUpdated ? (Date.now() - lastUpdated) / 1000 : null;
 
@@ -390,17 +398,22 @@ export default function App() {
             <Text style={s.emptyEmoji}>🚇</Text>
             <Text style={s.emptyTitle}>Roma Metro</Text>
             <Text style={s.emptySub}>Cerca una stazione per vedere gli orari</Text>
-            <View style={s.quickRow}>
-              {["Termini", "Spagna", "San Giovanni", "Tiburtina"].map((st) => (
-                <Pressable
-                  key={st}
-                  onPress={() => selectStation(st)}
-                  style={({ pressed }) => [s.quickBtn, pressed && s.pressed]}
-                >
-                  <Text style={s.quickBtnText}>{st}</Text>
-                </Pressable>
-              ))}
-            </View>
+            {recentStations.length > 0 && (
+              <>
+                <Text style={s.quickLabel}>Recenti</Text>
+                <View style={s.quickRow}>
+                  {recentStations.map((st) => (
+                    <Pressable
+                      key={st}
+                      onPress={() => selectStation(st)}
+                      style={({ pressed }) => [s.quickBtn, pressed && s.pressed]}
+                    >
+                      <Text style={s.quickBtnText}>{st}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </>
+            )}
           </View>
         )}
 
@@ -429,20 +442,6 @@ export default function App() {
                 </Pressable>
               </View>
             </View>
-
-            {/* Line availability pills */}
-            {linesWithArrivals.length > 0 && (
-              <View style={s.linesBadgeRow}>
-                <Text style={s.linesBadgeLabel}>Linee metro</Text>
-                <View style={s.linesBadges}>
-                  {linesWithArrivals.map((line) => (
-                    <View key={line} style={[s.lineBadge, { backgroundColor: LINE_CONFIG[line].color }]}>
-                      <Text style={s.lineBadgeText}>M{LINE_CONFIG[line].label}</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            )}
 
             {/* Loading */}
             {isLoading && (
@@ -475,69 +474,28 @@ export default function App() {
                   </>
                 )}
 
-                <View style={s.lineTabs}>
-                  {LINE_IDS.map((line) => {
-                    const cfg = LINE_CONFIG[line];
-                    const count = lineData.find((d) => d.line === line)?.data?.arrivals?.length ?? 0;
-                    const isActive = activeLineTab === line;
-                    return (
-                      <Pressable
-                        key={line}
-                        onPress={() => setActiveLineTab(line)}
-                        style={({ pressed }) => [
-                          s.lineTab,
-                          isActive && { backgroundColor: cfg.color, borderColor: cfg.color },
-                          pressed && s.pressed,
-                        ]}
-                      >
-                        <Text style={[s.lineTabLabel, isActive && s.lineTabLabelActive]}>
-                          M{cfg.label}
-                        </Text>
-                        {count > 0 && (
-                          <Text style={[s.lineTabCount, isActive && s.lineTabCountActive]}>
-                            {count}
-                          </Text>
-                        )}
-                      </Pressable>
-                    );
-                  })}
-                </View>
-
-                <Text style={[s.sectionTitle, { borderLeftColor: LINE_CONFIG[activeLineTab].color }]}>
-                  Metro {LINE_CONFIG[activeLineTab].label} · GTFS static
-                </Text>
-
-                {activeLineArrivals.length > 0 ? (
-                  activeLineArrivals.map((arrival, i) => (
-                    <ArrivalCard
-                      key={`${arrival.trip_id}-${arrival.stop_id}-${i}`}
-                      arrival={arrival}
-                      remaining={arrival._remaining}
-                      lineColor={LINE_CONFIG[activeLineTab].color}
-                    />
-                  ))
-                ) : (
-                  <View style={s.noData}>
-                    <Text style={s.noDataText}>
-                      Nessun arrivo trovato per la Linea {LINE_CONFIG[activeLineTab].label} a {activeStation}
-                    </Text>
-                  </View>
-                )}
-
-                {/* Surface transit at this station */}
-                {surfaceRoutes.length > 0 && (
+                {/* Surface transit scheduled departures — collapsible */}
+                {surfaceArrivalsLive.length > 0 && (
                   <>
-                    <Text style={[s.sectionTitle, { borderLeftColor: p.muted, marginTop: 8 }]}>
-                      Mezzi di superficie a {activeStation}
-                    </Text>
-                    <Text style={s.sectionSub}>
-                      Veicoli con fermata qui in questo momento
-                    </Text>
-                    <View style={s.routeGrid}>
-                      {surfaceRoutes.map((r) => (
-                        <SurfaceChip key={r.route_id} route={r} />
-                      ))}
-                    </View>
+                    <Pressable
+                      onPress={() => setShowSurface((v) => !v)}
+                      style={({ pressed }) => [s.surfaceToggle, pressed && s.pressed]}
+                    >
+                      <Text style={s.surfaceToggleTitle}>Superficie</Text>
+                      <Text style={s.surfaceToggleChevron}>{showSurface ? "▲" : "▼"}</Text>
+                    </Pressable>
+                    {showSurface && (
+                      <View style={s.boardCard}>
+                        {surfaceArrivalsLive.map((a, i) => (
+                          <SurfaceBoardRow
+                            key={`${a.trip_id}-${a.stop_id}-${i}`}
+                            arrival={a}
+                            remaining={a._remaining}
+                            last={i === surfaceArrivalsLive.length - 1}
+                          />
+                        ))}
+                      </View>
+                    )}
                   </>
                 )}
               </>
@@ -550,8 +508,6 @@ export default function App() {
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
-
-type ArrivalWithRemaining = ScheduledArrival & { _remaining: number };
 
 // Departure-board row for the cross-line "Prossimi arrivi" section
 function BoardRow({
@@ -567,15 +523,17 @@ function BoardRow({
   const gone = remaining === 0;
   return (
     <View style={[s.boardRow, !last && s.boardRowBorder]}>
-      {/* Line badge */}
-      <View style={[s.boardLineBadge, { backgroundColor: cfg.color }]}>
-        <Text style={s.boardLineBadgeText}>M{cfg.label}</Text>
+      {/* Left: badge + time + direction stacked */}
+      <View style={s.boardLeft}>
+        <View style={s.boardTopLine}>
+          <View style={[s.boardLineBadge, { backgroundColor: cfg.color }]}>
+            <Text style={s.boardLineBadgeText}>M{cfg.label}</Text>
+          </View>
+          <Text style={s.boardTime}>{arrival.scheduled_time}</Text>
+        </View>
+        <Text style={s.boardDirection} numberOfLines={1}>{arrival.direction || "—"}</Text>
       </View>
-      {/* Scheduled time */}
-      <Text style={s.boardTime}>{arrival.scheduled_time}</Text>
-      {/* Direction */}
-      <Text style={s.boardDirection} numberOfLines={1}>{arrival.direction || "—"}</Text>
-      {/* Live ETA */}
+      {/* Right: live ETA */}
       <View style={[s.boardEta, urgent && !gone && s.boardEtaUrgent, gone && s.boardEtaGone]}>
         <Text style={[s.boardEtaText, urgent && !gone && s.boardEtaTextUrgent, gone && s.boardEtaTextGone]}>
           {formatEta(remaining)}
@@ -585,35 +543,31 @@ function BoardRow({
   );
 }
 
-// Per-line detailed arrival card
-function ArrivalCard({ arrival, remaining, lineColor }: { arrival: ArrivalWithRemaining; remaining: number; lineColor: string }) {
+function SurfaceBoardRow({
+  arrival, remaining, last,
+}: {
+  arrival: SurfaceScheduledArrival;
+  remaining: number;
+  last: boolean;
+}) {
   const urgent = remaining <= 120;
   const gone = remaining === 0;
   return (
-    <View style={[s.arrivalCard, gone && s.arrivalCardGone]}>
-      <View style={[s.arrivalAccent, { backgroundColor: lineColor }]} />
-      <View style={s.arrivalLeft}>
-        <Text style={s.arrivalTime}>{arrival.scheduled_time}</Text>
-        <Text style={s.arrivalStop}>{arrival.stop_id}</Text>
+    <View style={[s.boardRow, !last && s.boardRowBorder]}>
+      <View style={s.boardLeft}>
+        <View style={s.boardTopLine}>
+          <View style={s.surfaceRouteBadge}>
+            <Text style={s.surfaceRouteBadgeText}>{arrival.route_id}</Text>
+          </View>
+          <Text style={s.boardTime}>{arrival.scheduled_time}</Text>
+        </View>
+        <Text style={s.boardDirection} numberOfLines={1}>{arrival.direction || "—"}</Text>
       </View>
-      <View style={s.arrivalCenter}>
-        <Text style={s.arrivalDirection} numberOfLines={1}>{arrival.direction || "—"}</Text>
-      </View>
-      <View style={[s.arrivalEta, urgent && !gone && s.arrivalEtaUrgent, gone && s.arrivalEtaGone]}>
-        <Text style={[s.arrivalEtaText, urgent && !gone && s.arrivalEtaTextUrgent, gone && s.arrivalEtaTextGone]}>
+      <View style={[s.boardEta, urgent && !gone && s.boardEtaUrgent, gone && s.boardEtaGone]}>
+        <Text style={[s.boardEtaText, urgent && !gone && s.boardEtaTextUrgent, gone && s.boardEtaTextGone]}>
           {formatEta(remaining)}
         </Text>
       </View>
-    </View>
-  );
-}
-
-function SurfaceChip({ route }: { route: SurfaceRoute }) {
-  return (
-    <View style={s.surfaceChip}>
-      <Text style={s.surfaceChipId}>{route.route_id}</Text>
-      <View style={s.surfaceChipDot} />
-      <Text style={s.surfaceChipCount}>{route.active_vehicles}</Text>
     </View>
   );
 }
@@ -683,7 +637,8 @@ const s = StyleSheet.create({
   emptyEmoji: { fontSize: 56 },
   emptyTitle: { color: p.ink, fontSize: 22, fontWeight: "800", marginTop: 8 },
   emptySub: { color: p.muted, fontSize: 15, textAlign: "center" },
-  quickRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center", marginTop: 16 },
+  quickLabel: { color: p.mutedLight, fontSize: 11, fontWeight: "700", letterSpacing: 0.8, textTransform: "uppercase", marginTop: 20 },
+  quickRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center", marginTop: 8 },
   quickBtn: { backgroundColor: p.white, borderColor: p.border, borderRadius: 999, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 9 },
   quickBtnText: { color: p.ink, fontSize: 14, fontWeight: "600" },
 
@@ -707,30 +662,12 @@ const s = StyleSheet.create({
   },
   refreshBtnText: { color: p.romanRed, fontSize: 13, fontWeight: "700" },
 
-  // Line badges
-  linesBadgeRow: { alignItems: "center", flexDirection: "row", gap: 10 },
-  linesBadgeLabel: { color: p.muted, fontSize: 12, fontWeight: "700" },
-  linesBadges: { flexDirection: "row", gap: 6 },
-  lineBadge: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
-  lineBadgeText: { color: p.white, fontSize: 12, fontWeight: "800" },
-
   // Loading
   loadingBox: {
     alignItems: "center", backgroundColor: p.panel, borderColor: p.border,
     borderRadius: 12, borderWidth: 1, gap: 12, padding: 32,
   },
   loadingText: { color: p.muted, fontSize: 15 },
-
-  // Line tabs
-  lineTabs: { flexDirection: "row", gap: 8 },
-  lineTab: {
-    alignItems: "center", backgroundColor: p.white, borderColor: p.border,
-    borderRadius: 10, borderWidth: 1.5, flex: 1, gap: 4, minHeight: 48, justifyContent: "center",
-  },
-  lineTabLabel: { color: p.ink, fontSize: 13, fontWeight: "800" },
-  lineTabLabelActive: { color: p.white },
-  lineTabCount: { color: p.muted, fontSize: 11, fontWeight: "700" },
-  lineTabCountActive: { color: "rgba(255,255,255,0.75)" },
 
   // Section titles
   sectionTitle: { borderLeftWidth: 3, color: p.ink, fontSize: 15, fontWeight: "800", paddingLeft: 10 },
@@ -747,27 +684,29 @@ const s = StyleSheet.create({
   boardRow: {
     alignItems: "center",
     flexDirection: "row",
-    gap: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   boardRowBorder: { borderBottomColor: p.border, borderBottomWidth: 1 },
+  boardLeft: { flex: 1, gap: 3 },
+  boardTopLine: { alignItems: "center", flexDirection: "row", gap: 8 },
   boardLineBadge: {
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    minWidth: 34,
+    borderRadius: 5,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    minWidth: 30,
     alignItems: "center",
   },
-  boardLineBadgeText: { color: p.white, fontSize: 11, fontWeight: "800" },
-  boardTime: { color: p.ink, fontSize: 17, fontWeight: "900", width: 46 },
-  boardDirection: { color: p.muted, flex: 1, fontSize: 13, fontWeight: "600" },
+  boardLineBadgeText: { color: p.white, fontSize: 10, fontWeight: "800" },
+  boardTime: { color: p.ink, fontSize: 22, fontWeight: "900", letterSpacing: -0.5 },
+  boardDirection: { color: p.muted, fontSize: 13, fontWeight: "500" },
   boardEta: {
     backgroundColor: "#F0F0F0",
-    borderRadius: 7,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    minWidth: 52,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    minWidth: 58,
     alignItems: "center",
   },
   boardEtaUrgent: { backgroundColor: "#FEF3C7" },
@@ -776,39 +715,20 @@ const s = StyleSheet.create({
   boardEtaTextUrgent: { color: "#92400E" },
   boardEtaTextGone: { color: p.mutedLight },
 
-  // Arrival cards
-  arrivalCard: {
-    alignItems: "center", backgroundColor: p.panel, borderColor: p.border,
-    borderRadius: 12, borderWidth: 1, flexDirection: "row", overflow: "hidden", paddingRight: 12,
+  // Surface section toggle
+  surfaceToggle: {
+    alignItems: "center", flexDirection: "row", justifyContent: "space-between",
+    marginTop: 8, paddingVertical: 4,
   },
-  arrivalCardGone: { opacity: 0.45 },
-  arrivalAccent: { alignSelf: "stretch", marginRight: 12, width: 4 },
-  arrivalLeft: { gap: 2, paddingVertical: 12, width: 54 },
-  arrivalTime: { color: p.ink, fontSize: 17, fontWeight: "900" },
-  arrivalStop: { color: p.mutedLight, fontSize: 11, fontWeight: "600" },
-  arrivalCenter: { flex: 1, paddingVertical: 12, paddingRight: 8 },
-  arrivalDirection: { color: p.ink, fontSize: 14, fontWeight: "700" },
-  arrivalEta: { backgroundColor: "#F0F0F0", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, minWidth: 56, alignItems: "center" },
-  arrivalEtaUrgent: { backgroundColor: "#FEF3C7" },
-  arrivalEtaGone: { backgroundColor: "#F5F5F5" },
-  arrivalEtaText: { color: p.muted, fontSize: 13, fontWeight: "800" },
-  arrivalEtaTextUrgent: { color: "#92400E" },
-  arrivalEtaTextGone: { color: p.mutedLight },
+  surfaceToggleTitle: { borderLeftColor: p.muted, borderLeftWidth: 3, color: p.ink, fontSize: 15, fontWeight: "800", paddingLeft: 10 },
+  surfaceToggleChevron: { color: p.mutedLight, fontSize: 12 },
 
-  // No data
-  noData: { backgroundColor: p.panel, borderColor: p.border, borderRadius: 12, borderWidth: 1, padding: 16 },
-  noDataText: { color: p.muted, fontSize: 14, lineHeight: 20 },
-
-  // Surface chips
-  routeGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  surfaceChip: {
-    alignItems: "center", backgroundColor: p.white, borderColor: p.border,
-    borderRadius: 8, borderWidth: 1, flexDirection: "row", gap: 6,
-    paddingHorizontal: 12, paddingVertical: 8,
+  // Surface route badge (neutral dark)
+  surfaceRouteBadge: {
+    borderRadius: 5, backgroundColor: p.muted,
+    paddingHorizontal: 6, paddingVertical: 2, minWidth: 30, alignItems: "center",
   },
-  surfaceChipId: { color: p.ink, fontSize: 15, fontWeight: "800" },
-  surfaceChipDot: { backgroundColor: "#4ADE80", borderRadius: 999, height: 6, width: 6 },
-  surfaceChipCount: { color: p.muted, fontSize: 12 },
+  surfaceRouteBadgeText: { color: p.white, fontSize: 10, fontWeight: "800" },
 
   pressed: { opacity: 0.7 },
 });
