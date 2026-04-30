@@ -98,17 +98,23 @@ const METRO_STATIONS = [
 
 const p = {
   romanRed: "#8E1537",
+  romanRedDark: "#6B0F29",
   romanGold: "#F6C445",
-  travertine: "#F5EFE0",
+  travertine: "#F2EAD8",
+  travertineDark: "#E8DEC8",
   ink: "#1A1816",
+  dim: "#3D342F",
   muted: "#6B5E57",
   mutedLight: "#9B8D87",
-  border: "#DDD4C2",
-  panel: "#FFFCF6",
-  success: "#176B4D",
-  danger: "#B42318",
+  border: "#D8CCBA",
+  borderLight: "#EAE2D2",
+  panel: "#FDFAF4",
   white: "#FFFFFF",
   black: "#000000",
+  urgentBg: "#FEF3C7",
+  urgentText: "#92400E",
+  goneBg: "#EFEFEF",
+  goneText: "#AEAEAE",
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -421,12 +427,12 @@ export default function App() {
         {activeStation && (
           <>
             {/* Station header */}
-            <View style={s.stationHeader}>
-              <View>
-                <Text style={s.stationEyebrow}>Stazione</Text>
+            <View style={s.stationCard}>
+              <View style={s.stationCardLeft}>
+                <Text style={s.stationEyebrow}>STAZIONE</Text>
                 <Text style={s.stationName}>{activeStation}</Text>
               </View>
-              <View style={s.stationHeaderRight}>
+              <View style={s.stationCardRight}>
                 {ageSec !== null && (
                   <Text style={s.ageText}>{formatAge(ageSec)}</Text>
                 )}
@@ -437,7 +443,7 @@ export default function App() {
                 >
                   {isRefreshing
                     ? <ActivityIndicator color={p.romanRed} size="small" />
-                    : <Text style={s.refreshBtnText}>↻ Aggiorna</Text>
+                    : <Text style={s.refreshBtnText}>↻</Text>
                   }
                 </Pressable>
               </View>
@@ -456,36 +462,41 @@ export default function App() {
               <>
                 {/* Prossimi arrivi — cross-line board */}
                 {imminentArrivals.length > 0 && (
-                  <>
-                    <Text style={[s.sectionTitle, { borderLeftColor: p.romanRed }]}>
-                      Prossimi arrivi
-                    </Text>
-                    <View style={s.boardCard}>
-                      {imminentArrivals.map((a, i) => (
-                        <BoardRow
-                          key={`${a.trip_id}-${a.stop_id}-${i}`}
-                          arrival={a}
-                          lineId={a._line}
-                          remaining={a._remaining}
-                          last={i === imminentArrivals.length - 1}
-                        />
-                      ))}
+                  <View style={s.boardCard}>
+                    <View style={s.boardCardHeader}>
+                      <Text style={s.boardCardHeaderText}>PROSSIMI ARRIVI</Text>
+                      <View style={s.livePill}>
+                        <View style={s.liveDot} />
+                        <Text style={s.livePillText}>live</Text>
+                      </View>
                     </View>
-                  </>
+                    {imminentArrivals.map((a, i) => (
+                      <BoardRow
+                        key={`${a.trip_id}-${a.stop_id}-${i}`}
+                        arrival={a}
+                        lineId={a._line}
+                        remaining={a._remaining}
+                        last={i === imminentArrivals.length - 1}
+                      />
+                    ))}
+                  </View>
                 )}
 
                 {/* Surface transit scheduled departures — collapsible */}
                 {surfaceArrivalsLive.length > 0 && (
-                  <>
+                  <View style={s.surfaceCard}>
                     <Pressable
                       onPress={() => setShowSurface((v) => !v)}
-                      style={({ pressed }) => [s.surfaceToggle, pressed && s.pressed]}
+                      style={({ pressed }) => [s.surfaceCardHeader, pressed && s.pressed]}
                     >
-                      <Text style={s.surfaceToggleTitle}>Superficie</Text>
-                      <Text style={s.surfaceToggleChevron}>{showSurface ? "▲" : "▼"}</Text>
+                      <Text style={s.surfaceCardHeaderText}>SUPERFICIE</Text>
+                      <View style={s.surfaceCardHeaderRight}>
+                        <Text style={s.surfaceCount}>{surfaceArrivalsLive.length}</Text>
+                        <Text style={s.surfaceChevron}>{showSurface ? "▲" : "▼"}</Text>
+                      </View>
                     </Pressable>
                     {showSurface && (
-                      <View style={s.boardCard}>
+                      <>
                         {surfaceArrivalsLive.map((a, i) => (
                           <SurfaceBoardRow
                             key={`${a.trip_id}-${a.stop_id}-${i}`}
@@ -494,9 +505,9 @@ export default function App() {
                             last={i === surfaceArrivalsLive.length - 1}
                           />
                         ))}
-                      </View>
+                      </>
                     )}
-                  </>
+                  </View>
                 )}
               </>
             )}
@@ -577,158 +588,165 @@ function SurfaceBoardRow({
 const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: p.travertine },
 
+  // ── Header ──────────────────────────────────────────────────────────────────
   header: {
     alignItems: "center",
     backgroundColor: p.romanRed,
     flexDirection: "row",
     justifyContent: "space-between",
     paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingTop: 14,
+    paddingBottom: 14,
+    shadowColor: p.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 4,
   },
-  headerRight: { alignItems: "center", flexDirection: "row", gap: 10 },
-  kicker: { color: p.romanGold, fontSize: 11, fontWeight: "700", letterSpacing: 1, textTransform: "uppercase" },
-  title: { color: p.white, fontSize: 28, fontWeight: "800", marginTop: 1 },
-  statusDot: { borderRadius: 999, height: 10, width: 10 },
+  headerRight: { alignItems: "center", flexDirection: "row", gap: 12 },
+  kicker: { color: p.romanGold, fontSize: 10, fontWeight: "700", letterSpacing: 1.5, textTransform: "uppercase" },
+  title: { color: p.white, fontSize: 26, fontWeight: "900", letterSpacing: -0.5, marginTop: 1 },
+  statusDot: { borderRadius: 999, height: 8, width: 8 },
   dotOk: { backgroundColor: "#4ADE80" },
   dotDown: { backgroundColor: "#F87171" },
-  settingsBtn: { padding: 4 },
-  settingsIcon: { color: p.romanGold, fontSize: 20 },
+  settingsBtn: { alignItems: "center", justifyContent: "center", padding: 6 },
+  settingsIcon: { color: "rgba(255,255,255,0.55)", fontSize: 18 },
 
-  settingsPanel: { backgroundColor: "#7A1030", paddingHorizontal: 20, paddingVertical: 12, gap: 6 },
-  settingsLabel: { color: "rgba(255,255,255,0.6)", fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5 },
-  settingsInput: { backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 8, color: p.white, fontSize: 14, minHeight: 40, paddingHorizontal: 12 },
+  settingsPanel: { backgroundColor: p.romanRedDark, paddingHorizontal: 20, paddingVertical: 14, gap: 8 },
+  settingsLabel: { color: "rgba(255,255,255,0.5)", fontSize: 10, fontWeight: "700", textTransform: "uppercase", letterSpacing: 1 },
+  settingsInput: { backgroundColor: "rgba(255,255,255,0.1)", borderRadius: 8, borderWidth: 1, borderColor: "rgba(255,255,255,0.15)", color: p.white, fontSize: 14, minHeight: 42, paddingHorizontal: 12 },
 
   scrollView: { flex: 1 },
-  content: { gap: 14, padding: 16, paddingBottom: 40 },
+  content: { gap: 12, padding: 16, paddingBottom: 48 },
 
-  // Search
+  // ── Search ──────────────────────────────────────────────────────────────────
   searchContainer: { zIndex: 10 },
   searchRow: {
     alignItems: "center",
     backgroundColor: p.white,
     borderColor: p.border,
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
     flexDirection: "row",
     gap: 8,
-    minHeight: 52,
-    paddingHorizontal: 12,
-    shadowColor: p.black,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+    minHeight: 54,
+    paddingHorizontal: 14,
+    shadowColor: p.ink,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07,
+    shadowRadius: 6,
+    elevation: 3,
   },
-  searchIconText: { fontSize: 16 },
-  searchInput: { color: p.ink, flex: 1, fontSize: 17, fontWeight: "500", minHeight: 52 },
-  clearBtn: { alignItems: "center", justifyContent: "center", padding: 4, width: 28 },
-  clearBtnText: { color: p.muted, fontSize: 16, fontWeight: "700" },
+  searchIconText: { color: p.mutedLight, fontSize: 18 },
+  searchInput: { color: p.ink, flex: 1, fontSize: 16, fontWeight: "500", minHeight: 54 },
+  clearBtn: { alignItems: "center", backgroundColor: p.travertineDark, borderRadius: 999, height: 24, justifyContent: "center", width: 24 },
+  clearBtnText: { color: p.dim, fontSize: 11, fontWeight: "800" },
   suggestions: {
-    backgroundColor: p.white, borderColor: p.border, borderRadius: 12, borderWidth: 1, marginTop: 4,
-    overflow: "hidden", shadowColor: p.black, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 4,
+    backgroundColor: p.white, borderColor: p.border, borderRadius: 14, borderWidth: 1, marginTop: 6,
+    overflow: "hidden", shadowColor: p.ink, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.1, shadowRadius: 12, elevation: 6,
   },
-  suggestion: { alignItems: "center", flexDirection: "row", gap: 12, paddingHorizontal: 16, paddingVertical: 14 },
-  suggestionBorder: { borderBottomColor: p.border, borderBottomWidth: 1 },
-  suggestionIcon: { fontSize: 16 },
+  suggestion: { alignItems: "center", flexDirection: "row", gap: 12, paddingHorizontal: 16, paddingVertical: 15 },
+  suggestionBorder: { borderBottomColor: p.borderLight, borderBottomWidth: 1 },
+  suggestionIcon: { fontSize: 15 },
   suggestionText: { color: p.ink, fontSize: 16, fontWeight: "500" },
 
-  // Empty state
-  emptyState: { alignItems: "center", gap: 8, justifyContent: "center", paddingTop: 60, paddingBottom: 60 },
-  emptyEmoji: { fontSize: 56 },
-  emptyTitle: { color: p.ink, fontSize: 22, fontWeight: "800", marginTop: 8 },
-  emptySub: { color: p.muted, fontSize: 15, textAlign: "center" },
-  quickLabel: { color: p.mutedLight, fontSize: 11, fontWeight: "700", letterSpacing: 0.8, textTransform: "uppercase", marginTop: 20 },
-  quickRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center", marginTop: 8 },
-  quickBtn: { backgroundColor: p.white, borderColor: p.border, borderRadius: 999, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 9 },
-  quickBtnText: { color: p.ink, fontSize: 14, fontWeight: "600" },
+  // ── Empty state ─────────────────────────────────────────────────────────────
+  emptyState: { alignItems: "center", gap: 6, justifyContent: "center", paddingTop: 64, paddingBottom: 64 },
+  emptyEmoji: { fontSize: 52 },
+  emptyTitle: { color: p.ink, fontSize: 22, fontWeight: "900", letterSpacing: -0.3, marginTop: 10 },
+  emptySub: { color: p.muted, fontSize: 15, textAlign: "center", lineHeight: 22 },
+  quickLabel: { color: p.mutedLight, fontSize: 10, fontWeight: "700", letterSpacing: 1.2, textTransform: "uppercase", marginTop: 24 },
+  quickRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center", marginTop: 10 },
+  quickBtn: {
+    backgroundColor: p.white, borderColor: p.border, borderRadius: 999, borderWidth: 1,
+    paddingHorizontal: 18, paddingVertical: 10,
+    shadowColor: p.ink, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 3, elevation: 1,
+  },
+  quickBtnText: { color: p.dim, fontSize: 14, fontWeight: "600" },
 
-  // Station header
-  stationHeader: { alignItems: "flex-start", flexDirection: "row", justifyContent: "space-between" },
-  stationEyebrow: { color: p.muted, fontSize: 11, fontWeight: "700", letterSpacing: 0.8, textTransform: "uppercase" },
-  stationName: { color: p.romanRed, fontSize: 30, fontWeight: "900", letterSpacing: -0.5, marginTop: 2 },
-  stationHeaderRight: { alignItems: "flex-end", gap: 6, marginTop: 4 },
+  // ── Station card ────────────────────────────────────────────────────────────
+  stationCard: {
+    alignItems: "center", backgroundColor: p.panel, borderColor: p.border,
+    borderRadius: 14, borderWidth: 1, flexDirection: "row",
+    justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 14,
+    shadowColor: p.ink, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
+  },
+  stationCardLeft: { flex: 1 },
+  stationCardRight: { alignItems: "flex-end", gap: 6 },
+  stationEyebrow: { color: p.mutedLight, fontSize: 10, fontWeight: "700", letterSpacing: 1.2, textTransform: "uppercase" },
+  stationName: { color: p.romanRed, fontSize: 28, fontWeight: "900", letterSpacing: -0.5, marginTop: 2 },
   ageText: { color: p.mutedLight, fontSize: 11 },
   refreshBtn: {
-    backgroundColor: p.white,
-    borderColor: p.border,
-    borderRadius: 8,
-    borderWidth: 1,
-    minHeight: 34,
-    minWidth: 90,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    alignItems: "center", backgroundColor: p.travertineDark,
+    borderRadius: 999, height: 34, justifyContent: "center", width: 34,
   },
-  refreshBtnText: { color: p.romanRed, fontSize: 13, fontWeight: "700" },
+  refreshBtnText: { color: p.romanRed, fontSize: 18, fontWeight: "700" },
 
-  // Loading
-  loadingBox: {
-    alignItems: "center", backgroundColor: p.panel, borderColor: p.border,
-    borderRadius: 12, borderWidth: 1, gap: 12, padding: 32,
-  },
-  loadingText: { color: p.muted, fontSize: 15 },
+  // ── Loading ─────────────────────────────────────────────────────────────────
+  loadingBox: { alignItems: "center", gap: 10, paddingVertical: 40 },
+  loadingText: { color: p.mutedLight, fontSize: 14, letterSpacing: 0.3 },
 
-  // Section titles
-  sectionTitle: { borderLeftWidth: 3, color: p.ink, fontSize: 15, fontWeight: "800", paddingLeft: 10 },
-  sectionSub: { color: p.mutedLight, fontSize: 12, paddingLeft: 13, marginTop: -8 },
-
-  // Departure board (cross-line prossimi arrivi)
+  // ── Metro departure board ───────────────────────────────────────────────────
   boardCard: {
-    backgroundColor: p.panel,
-    borderColor: p.border,
-    borderRadius: 12,
-    borderWidth: 1,
-    overflow: "hidden",
+    backgroundColor: p.panel, borderColor: p.border,
+    borderRadius: 14, borderWidth: 1, overflow: "hidden",
+    shadowColor: p.ink, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
   },
+  boardCardHeader: {
+    alignItems: "center", backgroundColor: p.romanRed,
+    flexDirection: "row", justifyContent: "space-between",
+    paddingHorizontal: 14, paddingVertical: 10,
+  },
+  boardCardHeaderText: { color: "rgba(255,255,255,0.9)", fontSize: 10, fontWeight: "800", letterSpacing: 1.5 },
+  livePill: { alignItems: "center", backgroundColor: "rgba(255,255,255,0.15)", borderRadius: 999, flexDirection: "row", gap: 5, paddingHorizontal: 8, paddingVertical: 3 },
+  liveDot: { backgroundColor: "#4ADE80", borderRadius: 999, height: 6, width: 6 },
+  livePillText: { color: "rgba(255,255,255,0.9)", fontSize: 10, fontWeight: "700" },
   boardRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    alignItems: "center", flexDirection: "row", gap: 12,
+    paddingHorizontal: 14, paddingVertical: 14,
   },
-  boardRowBorder: { borderBottomColor: p.border, borderBottomWidth: 1 },
-  boardLeft: { flex: 1, gap: 3 },
+  boardRowBorder: { borderBottomColor: p.borderLight, borderBottomWidth: 1 },
+  boardLeft: { flex: 1, gap: 4 },
   boardTopLine: { alignItems: "center", flexDirection: "row", gap: 8 },
   boardLineBadge: {
-    borderRadius: 5,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    minWidth: 30,
-    alignItems: "center",
+    alignItems: "center", borderRadius: 6,
+    paddingHorizontal: 7, paddingVertical: 3, minWidth: 32,
   },
-  boardLineBadgeText: { color: p.white, fontSize: 10, fontWeight: "800" },
-  boardTime: { color: p.ink, fontSize: 22, fontWeight: "900", letterSpacing: -0.5 },
-  boardDirection: { color: p.muted, fontSize: 13, fontWeight: "500" },
+  boardLineBadgeText: { color: p.white, fontSize: 10, fontWeight: "900", letterSpacing: 0.3 },
+  boardTime: { color: p.ink, fontSize: 21, fontWeight: "900", letterSpacing: -0.5 },
+  boardDirection: { color: p.dim, fontSize: 13, fontWeight: "500", letterSpacing: 0.1 },
   boardEta: {
-    backgroundColor: "#F0F0F0",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    minWidth: 58,
-    alignItems: "center",
+    alignItems: "center", backgroundColor: p.travertineDark,
+    borderRadius: 10, minWidth: 64, paddingHorizontal: 10, paddingVertical: 8,
   },
-  boardEtaUrgent: { backgroundColor: "#FEF3C7" },
-  boardEtaGone: { backgroundColor: "#F5F5F5" },
-  boardEtaText: { color: p.muted, fontSize: 13, fontWeight: "800" },
-  boardEtaTextUrgent: { color: "#92400E" },
-  boardEtaTextGone: { color: p.mutedLight },
+  boardEtaUrgent: { backgroundColor: p.urgentBg },
+  boardEtaGone: { backgroundColor: p.goneBg },
+  boardEtaText: { color: p.muted, fontSize: 14, fontWeight: "800" },
+  boardEtaTextUrgent: { color: p.urgentText },
+  boardEtaTextGone: { color: p.goneText },
 
-  // Surface section toggle
-  surfaceToggle: {
-    alignItems: "center", flexDirection: "row", justifyContent: "space-between",
-    marginTop: 8, paddingVertical: 4,
+  // ── Surface departure card ──────────────────────────────────────────────────
+  surfaceCard: {
+    backgroundColor: p.panel, borderColor: p.border,
+    borderRadius: 14, borderWidth: 1, overflow: "hidden",
+    shadowColor: p.ink, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
   },
-  surfaceToggleTitle: { borderLeftColor: p.muted, borderLeftWidth: 3, color: p.ink, fontSize: 15, fontWeight: "800", paddingLeft: 10 },
-  surfaceToggleChevron: { color: p.mutedLight, fontSize: 12 },
+  surfaceCardHeader: {
+    alignItems: "center", backgroundColor: p.travertineDark,
+    flexDirection: "row", justifyContent: "space-between",
+    paddingHorizontal: 14, paddingVertical: 12,
+  },
+  surfaceCardHeaderText: { color: p.dim, fontSize: 10, fontWeight: "800", letterSpacing: 1.5 },
+  surfaceCardHeaderRight: { alignItems: "center", flexDirection: "row", gap: 8 },
+  surfaceCount: { backgroundColor: p.border, borderRadius: 999, color: p.muted, fontSize: 11, fontWeight: "700", minWidth: 22, paddingHorizontal: 6, paddingVertical: 1, textAlign: "center" },
+  surfaceChevron: { color: p.mutedLight, fontSize: 10, fontWeight: "700" },
 
-  // Surface route badge (neutral dark)
+  // Surface route badge
   surfaceRouteBadge: {
-    borderRadius: 5, backgroundColor: p.muted,
-    paddingHorizontal: 6, paddingVertical: 2, minWidth: 30, alignItems: "center",
+    alignItems: "center", backgroundColor: p.dim,
+    borderRadius: 6, minWidth: 32, paddingHorizontal: 7, paddingVertical: 3,
   },
-  surfaceRouteBadgeText: { color: p.white, fontSize: 10, fontWeight: "800" },
+  surfaceRouteBadgeText: { color: p.white, fontSize: 10, fontWeight: "900", letterSpacing: 0.3 },
 
-  pressed: { opacity: 0.7 },
+  pressed: { opacity: 0.65 },
 });
