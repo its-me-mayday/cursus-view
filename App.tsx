@@ -81,19 +81,6 @@ const LINE_CONFIG: Record<LineID, { color: string; label: string }> = {
   MC: { color: "#006B3C", label: "C" },
 };
 
-const METRO_STATIONS = [
-  "Anagnina", "Arco di Travertino", "Barberini", "Basilica San Paolo",
-  "Battistini", "Bologna", "Borghesiana", "Castro Pretorio", "Cinecittà",
-  "Cipro", "Circo Massimo", "Colosseo", "EUR Fermi", "EUR Laurentina",
-  "EUR Palasport", "Flaminio", "Garbatella", "Grotte Celoni", "Giulio Agricola",
-  "Laurentina", "Lepanto", "Lucio Sestio", "Magliana", "Mirti",
-  "Monti Tiburtini", "Numidio Quadrato", "Ottaviano", "Pantano", "Piramide",
-  "Policlinico", "Ponte Lungo", "Ponte Mammolo", "Re di Roma", "Rebibbia",
-  "Repubblica", "San Basilio", "San Giovanni", "Santa Maria del Soccorso",
-  "Spagna", "Subaugusta", "Termini", "Tiburtina",
-  "Torre Gaia", "Torrenova", "Monte Compatri",
-];
-
 // ─── Palette ─────────────────────────────────────────────────────────────────
 
 const p = {
@@ -143,16 +130,21 @@ function formatAge(seconds: number): string {
 export default function App() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
   const [showSettings, setShowSettings] = useState(false);
-  const [searchText, setSearchText] = useState("");
+
+  // ── Navigation state ─────────────────────────────────────────────────────
+  const [selectedLine, setSelectedLine] = useState<LineID | null>(null);
+  const [lineStations, setLineStations] = useState<string[]>([]);
+  const [isLoadingStations, setIsLoadingStations] = useState(false);
   const [activeStation, setActiveStation] = useState<string | null>(null);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  // ── Data state ───────────────────────────────────────────────────────────
   const [health, setHealth] = useState<Health | null>(null);
   const [lineData, setLineData] = useState<LineData[]>([]);
   const [surfaceArrivals, setSurfaceArrivals] = useState<SurfaceScheduledArrival[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<number | null>(null); // timestamp ms
-  const [tickNow, setTickNow] = useState(0); // increments every second for countdown
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  const [tickNow, setTickNow] = useState(0);
   const [recentStations, setRecentStations] = useState<string[]>([]);
   const [showSurface, setShowSurface] = useState(false);
 
@@ -193,19 +185,26 @@ export default function App() {
     [baseUrl],
   );
 
-  // ── Suggestions ──────────────────────────────────────────────────────────
+  // ── Navigation functions ─────────────────────────────────────────────────
 
-  const handleSearchChange = (text: string) => {
-    setSearchText(text);
-    if (text.trim().length < 2) { setSuggestions([]); return; }
-    const q = text.toLowerCase();
-    setSuggestions(METRO_STATIONS.filter((s) => s.toLowerCase().includes(q)).slice(0, 6));
+  const selectLine = async (line: LineID) => {
+    setSelectedLine(line);
+    setLineStations([]);
+    setIsLoadingStations(true);
+    try {
+      const data = await fetchJson<{ line: string; stations: string[] }>(
+        `/api/v1/scheduled/metro/stations?line=${line}`
+      );
+      setLineStations(data.stations ?? []);
+    } catch {
+      setLineStations([]);
+    } finally {
+      setIsLoadingStations(false);
+    }
   };
 
   const selectStation = (name: string) => {
-    setSearchText(name);
     setActiveStation(name);
-    setSuggestions([]);
     setLineData([]);
     setSurfaceArrivals([]);
     setShowSurface(false);
@@ -216,13 +215,19 @@ export default function App() {
     });
   };
 
-  const clearStation = () => {
-    setSearchText("");
-    setActiveStation(null);
-    setSuggestions([]);
-    setLineData([]);
-    setSurfaceArrivals([]);
-    setLastUpdated(null);
+  const goBack = () => {
+    if (activeStation) {
+      // arrivals → station list
+      setActiveStation(null);
+      setLineData([]);
+      setSurfaceArrivals([]);
+      setShowSurface(false);
+      setLastUpdated(null);
+    } else {
+      // station list → line picker
+      setSelectedLine(null);
+      setLineStations([]);
+    }
   };
 
   // ── Data fetch ───────────────────────────────────────────────────────────
@@ -284,7 +289,6 @@ export default function App() {
 
   // ── Derived ──────────────────────────────────────────────────────────────
 
-  // Combined cross-line imminent arrivals for the station overview
   const imminentArrivals = useMemo(() => {
     void tickNow;
     const el = lastUpdated ? Math.floor((Date.now() - lastUpdated) / 1000) : 0;
@@ -356,64 +360,28 @@ export default function App() {
             : undefined
         }
       >
-        {/* Search */}
-        <View style={s.searchContainer}>
-          <View style={s.searchRow}>
-            <Text style={s.searchIconText}>🔍</Text>
-            <TextInput
-              autoCapitalize="words"
-              autoCorrect={false}
-              onChangeText={handleSearchChange}
-              onSubmitEditing={() => { if (searchText.trim()) selectStation(searchText.trim()); }}
-              placeholder="Cerca stazione metro…"
-              placeholderTextColor={p.mutedLight}
-              returnKeyType="search"
-              style={s.searchInput}
-              value={searchText}
-            />
-            {searchText.length > 0 && (
-              <Pressable onPress={clearStation} style={s.clearBtn}>
-                <Text style={s.clearBtnText}>✕</Text>
-              </Pressable>
-            )}
-          </View>
-
-          {suggestions.length > 0 && (
-            <View style={s.suggestions}>
-              {suggestions.map((sug, i) => (
+        {/* ── Line picker (selectedLine == null) ── */}
+        {selectedLine === null && (
+          <View style={s.linePickerScreen}>
+            <Text style={s.linePickerTitle}>Seleziona la linea</Text>
+            <View style={s.lineGrid}>
+              {(["MA", "MB", "MB1", "MC"] as LineID[]).map((line) => (
                 <Pressable
-                  key={sug}
-                  onPress={() => selectStation(sug)}
-                  style={({ pressed }) => [
-                    s.suggestion,
-                    i < suggestions.length - 1 && s.suggestionBorder,
-                    pressed && s.pressed,
-                  ]}
+                  key={line}
+                  onPress={() => selectLine(line)}
+                  style={({ pressed }) => [s.lineCard, { backgroundColor: LINE_CONFIG[line].color }, pressed && s.pressed]}
                 >
-                  <Text style={s.suggestionIcon}>🚇</Text>
-                  <Text style={s.suggestionText}>{sug}</Text>
+                  <Text style={s.lineCardLetter}>M{LINE_CONFIG[line].label}</Text>
+                  <Text style={s.lineCardSub}>Linea {LINE_CONFIG[line].label}</Text>
                 </Pressable>
               ))}
             </View>
-          )}
-        </View>
-
-        {/* Empty state */}
-        {!activeStation && suggestions.length === 0 && (
-          <View style={[s.emptyState, { minHeight: 400 }]}>
-            <Text style={s.emptyEmoji}>🚇</Text>
-            <Text style={s.emptyTitle}>Roma Metro</Text>
-            <Text style={s.emptySub}>Cerca una stazione per vedere gli orari</Text>
             {recentStations.length > 0 && (
               <>
-                <Text style={s.quickLabel}>Recenti</Text>
+                <Text style={s.quickLabel}>RECENTI</Text>
                 <View style={s.quickRow}>
                   {recentStations.map((st) => (
-                    <Pressable
-                      key={st}
-                      onPress={() => selectStation(st)}
-                      style={({ pressed }) => [s.quickBtn, pressed && s.pressed]}
-                    >
+                    <Pressable key={st} onPress={() => selectStation(st)} style={({ pressed }) => [s.quickBtn, pressed && s.pressed]}>
                       <Text style={s.quickBtnText}>{st}</Text>
                     </Pressable>
                   ))}
@@ -423,9 +391,56 @@ export default function App() {
           </View>
         )}
 
-        {/* Station view */}
-        {activeStation && (
+        {/* ── Station list (selectedLine != null && activeStation == null) ── */}
+        {selectedLine !== null && activeStation === null && (
           <>
+            {/* breadcrumb */}
+            <Pressable onPress={goBack} style={({ pressed }) => [s.breadcrumb, pressed && s.pressed]}>
+              <Text style={s.breadcrumbBack}>←</Text>
+              <View style={[s.breadcrumbPill, { backgroundColor: LINE_CONFIG[selectedLine].color }]}>
+                <Text style={s.breadcrumbPillText}>M{LINE_CONFIG[selectedLine].label}</Text>
+              </View>
+              <Text style={s.breadcrumbLabel}>Linea {LINE_CONFIG[selectedLine].label}</Text>
+            </Pressable>
+            {isLoadingStations ? (
+              <View style={s.loadingBox}>
+                <ActivityIndicator color={LINE_CONFIG[selectedLine].color} size="large" />
+              </View>
+            ) : (
+              <View style={s.stationList}>
+                {lineStations.map((st, i) => (
+                  <Pressable
+                    key={st}
+                    onPress={() => selectStation(st)}
+                    style={({ pressed }) => [
+                      s.stationRow,
+                      i < lineStations.length - 1 && s.stationRowBorder,
+                      pressed && s.pressed,
+                    ]}
+                  >
+                    <Text style={s.stationRowText}>{st}</Text>
+                    <Text style={s.stationRowChevron}>›</Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+          </>
+        )}
+
+        {/* ── Arrivals (activeStation != null) ── */}
+        {activeStation !== null && (
+          <>
+            {/* breadcrumb */}
+            <Pressable onPress={goBack} style={({ pressed }) => [s.breadcrumb, pressed && s.pressed]}>
+              <Text style={s.breadcrumbBack}>←</Text>
+              {selectedLine && (
+                <View style={[s.breadcrumbPill, { backgroundColor: LINE_CONFIG[selectedLine].color }]}>
+                  <Text style={s.breadcrumbPillText}>M{LINE_CONFIG[selectedLine].label}</Text>
+                </View>
+              )}
+              <Text style={s.breadcrumbLabel}>{selectedLine ? `Linea ${LINE_CONFIG[selectedLine].label}` : "Stazioni"}</Text>
+            </Pressable>
+
             {/* Station header */}
             <View style={s.stationCard}>
               <View style={s.stationCardLeft}>
@@ -520,7 +535,6 @@ export default function App() {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-// Departure-board row for the cross-line "Prossimi arrivi" section
 function BoardRow({
   arrival, lineId, remaining, last,
 }: {
@@ -534,17 +548,18 @@ function BoardRow({
   const gone = remaining === 0;
   return (
     <View style={[s.boardRow, !last && s.boardRowBorder]}>
-      {/* Left: badge + time + direction stacked */}
       <View style={s.boardLeft}>
         <View style={s.boardTopLine}>
           <View style={[s.boardLineBadge, { backgroundColor: cfg.color }]}>
             <Text style={s.boardLineBadgeText}>M{cfg.label}</Text>
           </View>
           <Text style={s.boardTime}>{arrival.scheduled_time}</Text>
+          <View style={s.platformBadge}>
+            <Text style={s.platformBadgeText}>{arrival.stop_id}</Text>
+          </View>
         </View>
         <Text style={s.boardDirection} numberOfLines={1}>{arrival.direction || "—"}</Text>
       </View>
-      {/* Right: live ETA */}
       <View style={[s.boardEta, urgent && !gone && s.boardEtaUrgent, gone && s.boardEtaGone]}>
         <Text style={[s.boardEtaText, urgent && !gone && s.boardEtaTextUrgent, gone && s.boardEtaTextGone]}>
           {formatEta(remaining)}
@@ -619,50 +634,41 @@ const s = StyleSheet.create({
   scrollView: { flex: 1 },
   content: { gap: 12, padding: 16, paddingBottom: 48 },
 
-  // ── Search ──────────────────────────────────────────────────────────────────
-  searchContainer: { zIndex: 10 },
-  searchRow: {
-    alignItems: "center",
-    backgroundColor: p.white,
-    borderColor: p.border,
-    borderRadius: 14,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: 8,
-    minHeight: 54,
-    paddingHorizontal: 14,
-    shadowColor: p.ink,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.07,
-    shadowRadius: 6,
-    elevation: 3,
+  // ── Line picker ─────────────────────────────────────────────────────────────
+  linePickerScreen: { gap: 20, paddingTop: 8 },
+  linePickerTitle: { color: p.dim, fontSize: 13, fontWeight: "700", letterSpacing: 0.5, textTransform: "uppercase" },
+  lineGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  lineCard: {
+    alignItems: "center", borderRadius: 16, flex: 1, justifyContent: "center",
+    minHeight: 100, minWidth: "45%", gap: 4,
+    shadowColor: p.black, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 4,
   },
-  searchIconText: { color: p.mutedLight, fontSize: 18 },
-  searchInput: { color: p.ink, flex: 1, fontSize: 16, fontWeight: "500", minHeight: 54 },
-  clearBtn: { alignItems: "center", backgroundColor: p.travertineDark, borderRadius: 999, height: 24, justifyContent: "center", width: 24 },
-  clearBtnText: { color: p.dim, fontSize: 11, fontWeight: "800" },
-  suggestions: {
-    backgroundColor: p.white, borderColor: p.border, borderRadius: 14, borderWidth: 1, marginTop: 6,
-    overflow: "hidden", shadowColor: p.ink, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.1, shadowRadius: 12, elevation: 6,
-  },
-  suggestion: { alignItems: "center", flexDirection: "row", gap: 12, paddingHorizontal: 16, paddingVertical: 15 },
-  suggestionBorder: { borderBottomColor: p.borderLight, borderBottomWidth: 1 },
-  suggestionIcon: { fontSize: 15 },
-  suggestionText: { color: p.ink, fontSize: 16, fontWeight: "500" },
+  lineCardLetter: { color: p.white, fontSize: 32, fontWeight: "900", letterSpacing: -1 },
+  lineCardSub: { color: "rgba(255,255,255,0.75)", fontSize: 11, fontWeight: "700", letterSpacing: 0.5 },
 
-  // ── Empty state ─────────────────────────────────────────────────────────────
-  emptyState: { alignItems: "center", gap: 6, justifyContent: "center", paddingTop: 64, paddingBottom: 64 },
-  emptyEmoji: { fontSize: 52 },
-  emptyTitle: { color: p.ink, fontSize: 22, fontWeight: "900", letterSpacing: -0.3, marginTop: 10 },
-  emptySub: { color: p.muted, fontSize: 15, textAlign: "center", lineHeight: 22 },
-  quickLabel: { color: p.mutedLight, fontSize: 10, fontWeight: "700", letterSpacing: 1.2, textTransform: "uppercase", marginTop: 24 },
-  quickRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center", marginTop: 10 },
+  // ── Quick access (recenti) ───────────────────────────────────────────────────
+  quickLabel: { color: p.mutedLight, fontSize: 10, fontWeight: "700", letterSpacing: 1.2, textTransform: "uppercase" },
+  quickRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   quickBtn: {
     backgroundColor: p.white, borderColor: p.border, borderRadius: 999, borderWidth: 1,
     paddingHorizontal: 18, paddingVertical: 10,
     shadowColor: p.ink, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 3, elevation: 1,
   },
   quickBtnText: { color: p.dim, fontSize: 14, fontWeight: "600" },
+
+  // ── Breadcrumb nav ──────────────────────────────────────────────────────────
+  breadcrumb: { alignItems: "center", flexDirection: "row", gap: 8, paddingVertical: 2 },
+  breadcrumbBack: { color: p.muted, fontSize: 20, fontWeight: "300" },
+  breadcrumbPill: { borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
+  breadcrumbPillText: { color: p.white, fontSize: 11, fontWeight: "900" },
+  breadcrumbLabel: { color: p.dim, fontSize: 14, fontWeight: "600" },
+
+  // ── Station list ─────────────────────────────────────────────────────────────
+  stationList: { backgroundColor: p.panel, borderColor: p.border, borderRadius: 14, borderWidth: 1, overflow: "hidden" },
+  stationRow: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 15 },
+  stationRowBorder: { borderBottomColor: p.borderLight, borderBottomWidth: 1 },
+  stationRowText: { color: p.ink, fontSize: 16, fontWeight: "500" },
+  stationRowChevron: { color: p.mutedLight, fontSize: 22, fontWeight: "300" },
 
   // ── Station card ────────────────────────────────────────────────────────────
   stationCard: {
@@ -715,6 +721,8 @@ const s = StyleSheet.create({
   boardLineBadgeText: { color: p.white, fontSize: 10, fontWeight: "900", letterSpacing: 0.3 },
   boardTime: { color: p.ink, fontSize: 21, fontWeight: "900", letterSpacing: -0.5 },
   boardDirection: { color: p.dim, fontSize: 13, fontWeight: "500", letterSpacing: 0.1 },
+  platformBadge: { backgroundColor: p.travertineDark, borderRadius: 5, borderWidth: 1, borderColor: p.border, paddingHorizontal: 6, paddingVertical: 2 },
+  platformBadgeText: { color: p.mutedLight, fontSize: 10, fontWeight: "700", letterSpacing: 0.5 },
   boardEta: {
     alignItems: "center", backgroundColor: p.travertineDark,
     borderRadius: 10, minWidth: 64, paddingHorizontal: 10, paddingVertical: 8,
