@@ -253,10 +253,17 @@ export default function App() {
 
       const q = encodeURIComponent(station.trim());
 
+      // Only fetch lines that actually serve this station.
+      // Interchange stations are listed in STATION_LINES; regular stations
+      // are served only by the line the user navigated through.
+      // Recents (selectedLine null) fall back to all lines.
+      const linesToFetch: LineID[] =
+        STATION_LINES[station] ?? (selectedLine ? [selectedLine] : LINE_IDS);
+
       const [healthResult, surfaceResult, ...lineResults] = await Promise.allSettled([
         fetchJson<Health>("/health"),
         fetchJson<SurfaceArrivalsResponse>(`/api/v1/scheduled/surface-arrivals?station=${q}&limit=8`),
-        ...LINE_IDS.map((line) =>
+        ...linesToFetch.map((line) =>
           fetchJson<ScheduledArrivalsResponse>(
             `/api/v1/scheduled/metro/arrivals?station=${q}&line=${line}&limit=6`,
           ),
@@ -269,7 +276,7 @@ export default function App() {
         setSurfaceArrivals(surfaceResult.value.arrivals ?? []);
       }
 
-      const newLineData: LineData[] = LINE_IDS.map((line, idx) => {
+      const newLineData: LineData[] = linesToFetch.map((line, idx) => {
         const result = lineResults[idx];
         if (result.status === "fulfilled") {
           return { line, data: result.value as ScheduledArrivalsResponse, error: null };
@@ -284,7 +291,7 @@ export default function App() {
       setIsLoading(false);
       setIsRefreshing(false);
     },
-    [fetchJson],
+    [fetchJson, selectedLine],
   );
 
   useEffect(() => {
