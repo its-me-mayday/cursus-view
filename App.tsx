@@ -81,6 +81,20 @@ const LINE_CONFIG: Record<LineID, { color: string; label: string }> = {
   MC: { color: "#006B3C", label: "C" },
 };
 
+// Stations where multiple metro lines meet
+const STATION_LINES: Record<string, LineID[]> = {
+  Termini: ["MA", "MB", "MB1"],
+  "S. Giovanni": ["MA", "MC"],
+  "San Giovanni": ["MA", "MC"],
+  Bologna: ["MB", "MB1"],
+  Colosseo: ["MB", "MB1", "MC"],
+  "Colosseo/Fori Imperiali": ["MB", "MB1", "MC"],
+};
+
+function interchangeLines(stationName: string, currentLine: LineID): LineID[] {
+  return (STATION_LINES[stationName] ?? []).filter((l) => l !== currentLine);
+}
+
 // ─── Palette ─────────────────────────────────────────────────────────────────
 
 const p = {
@@ -407,21 +421,56 @@ export default function App() {
                 <ActivityIndicator color={LINE_CONFIG[selectedLine].color} size="large" />
               </View>
             ) : (
-              <View style={s.stationList}>
-                {lineStations.map((st, i) => (
-                  <Pressable
-                    key={st}
-                    onPress={() => selectStation(st)}
-                    style={({ pressed }) => [
-                      s.stationRow,
-                      i < lineStations.length - 1 && s.stationRowBorder,
-                      pressed && s.pressed,
-                    ]}
-                  >
-                    <Text style={s.stationRowText}>{st}</Text>
-                    <Text style={s.stationRowChevron}>›</Text>
-                  </Pressable>
-                ))}
+              <View style={s.metroMap}>
+                {lineStations.map((st, i) => {
+                  const isFirst = i === 0;
+                  const isLast = i === lineStations.length - 1;
+                  const isTerminus = isFirst || isLast;
+                  const otherLines = interchangeLines(st, selectedLine!);
+                  const isInterchange = otherLines.length > 0;
+                  const lineColor = LINE_CONFIG[selectedLine!].color;
+                  return (
+                    <View key={st} style={s.metroRow}>
+                      <View style={s.trackCol}>
+                        <View style={[s.trackSeg, { backgroundColor: isFirst ? "transparent" : lineColor }]} />
+                        <View style={[
+                          s.trackDot,
+                          (isTerminus || isInterchange)
+                            ? { width: 18, height: 18, borderRadius: 9, backgroundColor: lineColor, borderWidth: 0 }
+                            : { borderColor: lineColor },
+                        ]} />
+                        <View style={[s.trackSeg, { backgroundColor: isLast ? "transparent" : lineColor }]} />
+                      </View>
+                      <View style={s.metroStationArea}>
+                        <Pressable
+                          onPress={() => selectStation(st)}
+                          style={({ pressed }) => [pressed && s.pressed]}
+                        >
+                          <Text style={[s.metroStationName, (isTerminus || isInterchange) && s.metroStationNameBold]}>
+                            {st}
+                          </Text>
+                        </Pressable>
+                        {isInterchange && (
+                          <View style={s.metroInterchangeRow}>
+                            {otherLines.map((ol) => (
+                              <Pressable
+                                key={ol}
+                                onPress={() => selectLine(ol)}
+                                style={({ pressed }) => [
+                                  s.interchangePill,
+                                  { backgroundColor: LINE_CONFIG[ol].color },
+                                  pressed && s.pressed,
+                                ]}
+                              >
+                                <Text style={s.interchangePillText}>M{LINE_CONFIG[ol].label}</Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  );
+                })}
               </View>
             )}
           </>
@@ -663,12 +712,18 @@ const s = StyleSheet.create({
   breadcrumbPillText: { color: p.white, fontSize: 11, fontWeight: "900" },
   breadcrumbLabel: { color: p.dim, fontSize: 14, fontWeight: "600" },
 
-  // ── Station list ─────────────────────────────────────────────────────────────
-  stationList: { backgroundColor: p.panel, borderColor: p.border, borderRadius: 14, borderWidth: 1, overflow: "hidden" },
-  stationRow: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 15 },
-  stationRowBorder: { borderBottomColor: p.borderLight, borderBottomWidth: 1 },
-  stationRowText: { color: p.ink, fontSize: 16, fontWeight: "500" },
-  stationRowChevron: { color: p.mutedLight, fontSize: 22, fontWeight: "300" },
+  // ── Metro map (station diagram) ───────────────────────────────────────────────
+  metroMap: { paddingLeft: 4, paddingRight: 8 },
+  metroRow: { alignItems: "stretch", flexDirection: "row", minHeight: 56 },
+  trackCol: { alignItems: "center", width: 36 },
+  trackSeg: { flex: 1, width: 3 },
+  trackDot: { backgroundColor: p.white, borderRadius: 7, borderWidth: 2.5, height: 14, width: 14 },
+  metroStationArea: { flex: 1, justifyContent: "center", paddingLeft: 8, paddingVertical: 8 },
+  metroStationName: { color: p.ink, fontSize: 15, fontWeight: "500" },
+  metroStationNameBold: { fontWeight: "700" },
+  metroInterchangeRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 5 },
+  interchangePill: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  interchangePillText: { color: p.white, fontSize: 10, fontWeight: "900", letterSpacing: 0.3 },
 
   // ── Station card ────────────────────────────────────────────────────────────
   stationCard: {
